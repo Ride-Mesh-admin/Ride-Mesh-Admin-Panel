@@ -1,0 +1,37 @@
+@tailwind base;
+@layer base {
+  :root {
+    --background: #0f0f0f;
+    --background-sidebar: #121212;
+    --surface: #1e1e1e;
+    --border: #2a2a2a;
+    --text-primary: #ffffff;
+    --text-secondary: #a1a1aa;
+    --brand: #ff7918;
+    --brand-dark: #d54d02;
+    --success: #22c55e;
+    --danger: #ef4444;
+    --warning: #f59e0b;
+    --teal: #14b8a6;
+  }
+  :root[data-theme="light"] {
+    --background: #181818;
+    --background-sidebar: #1d1d1d;
+    --surface: #262626;
+    --border: #343434;
+    --text-primary: #f9f9f9;
+    --text-secondary: #b4b4bb;
+  }
+  body {
+    @apply bg-background text-text-primary antialiased;
+  }
+}
+
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
