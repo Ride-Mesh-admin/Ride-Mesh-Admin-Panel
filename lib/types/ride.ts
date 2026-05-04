@@ -2,7 +2,9 @@ export type RideStatus =
   | "under_review"
   | "active"
   | "reported"
-  | "flagged_ai";
+  | "flagged_ai"
+  | "approved"
+  | "cancelled";
 
 export interface RideListItem {
   id: string;

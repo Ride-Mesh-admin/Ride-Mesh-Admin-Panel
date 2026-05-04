@@ -41,7 +41,7 @@ export function UserTable({ users }: UserTableProps) {
     <div className="overflow-x-auto rounded-lg border border-border bg-surface">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-border text-xs font-medium uppercase tracking-wider text-white">
+          <tr className="border-b border-border text-xs font-medium uppercase tracking-wider text-text-primary">
             <th className="pb-3 pr-4 pt-4 pl-4">USERNAME</th>
             <th className="pb-3 pr-4 pt-4">ROLE</th>
             <th className="pb-3 pr-4 pt-4">STATUS</th>
@@ -55,12 +55,12 @@ export function UserTable({ users }: UserTableProps) {
               <td className="py-3 pr-4 pl-4">
                 <div className="flex items-center gap-3">
                   <div
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-white ${AVATAR_COLORS[user.avatarColor] ?? "bg-surface"}`}
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sm font-semibold ${(AVATAR_COLORS[user.avatarColor] ?? "bg-surface") === "bg-surface" ? "text-text-primary" : "text-brand-contrast"} ${AVATAR_COLORS[user.avatarColor] ?? "bg-surface"}`}
                   >
                     {getInitials(user.username)}
                   </div>
                   <div>
-                    <p className="font-medium text-white">{user.username}</p>
+                    <p className="font-medium text-text-primary">{user.username}</p>
                     <p className="text-xs text-text-secondary">{user.email}</p>
                   </div>
                 </div>
@@ -71,11 +71,11 @@ export function UserTable({ users }: UserTableProps) {
               <td className="py-3 pr-4">
                 <StatusCell status={user.status} />
               </td>
-              <td className="py-3 pr-4 text-white">{user.joinDate}</td>
+              <td className="py-3 pr-4 text-text-primary">{user.joinDate}</td>
               <td className="py-3 pl-4 pr-4 text-right">
                 <button
                   type="button"
-                  className="focus-ring rounded p-1.5 text-text-secondary hover:bg-border hover:text-white"
+                  className="focus-ring rounded p-1.5 text-text-secondary hover:bg-border hover:text-text-primary"
                   aria-label="Actions"
                 >
                   <MoreHorizontal className="h-4 w-4" />

@@ -9,23 +9,11 @@ export interface SafetyAlert {
   vehicle: string;
   alertMessage: string;
   alertIcon: "impact" | "warning" | "audio";
-  primaryButtonLabel: string;
-  primaryButtonIcon?: "deploy" | "phone" | "headphone";
   hasLiveIndicator?: boolean;
   avatarColor?: string;
-}
-
-export interface EmergencyContact {
-  name: string;
-  relation: string;
-  phone: string;
-}
-
-export interface IncidentDetails {
-  alertId: string;
-  vehicleTelemetry: {
-    currentSpeed: string;
-    gForceSpike?: string;
-  };
-  emergencyContacts: EmergencyContact[];
+  /** WGS84 — when set, the safety map pins this alert at exact coordinates */
+  latitude?: number;
+  longitude?: number;
+  /** Firestore event time (ms) for ordering — most recent SOS first */
+  createdAtMs?: number;
 }

@@ -40,7 +40,7 @@ export function ActivityLogList({ logs, serviceId }: ActivityLogListProps) {
               <span className="shrink-0 text-xs text-text-secondary">{log.timestamp}</span>
               <span className={`shrink-0 font-semibold ${style.textClass}`}>{style.label}</span>
               <span className="shrink-0 text-text-secondary">[{log.module}]</span>
-              <span className="min-w-0 flex-1 text-white">{log.message}</span>
+              <span className="min-w-0 flex-1 text-text-primary">{log.message}</span>
               <span
                 className={`shrink-0 text-xs ${highlightResponse ? style.responseClass : "text-text-secondary"}`}
               >

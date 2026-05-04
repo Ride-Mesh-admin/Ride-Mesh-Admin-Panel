@@ -35,7 +35,7 @@ export function RecentReportsTable({ reports }: RecentReportsTableProps) {
   return (
     <div className="rounded-lg border border-border bg-surface p-5">
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="font-bold text-white">RECENT RIDE REPORTS</h3>
+        <h3 className="font-bold text-text-primary">RECENT RIDE REPORTS</h3>
         <Link
           href="/safety-alerts"
           className="focus-ring rounded text-sm text-text-secondary hover:text-brand"
@@ -60,10 +60,10 @@ export function RecentReportsTable({ reports }: RecentReportsTableProps) {
                 key={report.id}
                 className="border-b border-border/80 last:border-0"
               >
-                <td className="py-3 pr-4 font-medium text-white">#{report.id}</td>
+                <td className="py-3 pr-4 font-medium text-text-primary">#{report.id}</td>
                 <td className="py-3 pr-4">
                   <div>
-                    <p className="font-medium text-white">{report.userName}</p>
+                    <p className="font-medium text-text-primary">{report.userName}</p>
                     <p className="text-xs text-text-secondary">
                       Driver: {report.driverName}
                     </p>
@@ -78,7 +78,7 @@ export function RecentReportsTable({ reports }: RecentReportsTableProps) {
                 <td className="py-3 pl-4 text-right">
                   <button
                     type="button"
-                    className="focus-ring rounded p-1 text-text-secondary hover:bg-border hover:text-white"
+                    className="focus-ring rounded p-1 text-text-secondary hover:bg-border hover:text-text-primary"
                     aria-label="More options"
                   >
                     <MoreHorizontal className="h-4 w-4" />

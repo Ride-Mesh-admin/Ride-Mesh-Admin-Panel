@@ -1,27 +1,51 @@
 @tailwind base;
 @layer base {
-  :root {
+  /**
+   * Dark mode (default admin console) — high contrast on charcoal; same orange system as Figma.
+   */
+  html {
     --background: #0f0f0f;
     --background-sidebar: #121212;
     --surface: #1e1e1e;
-    --border: #2a2a2a;
+    --surface-variant: #262626;
     --text-primary: #ffffff;
     --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --border: #2a2a2a;
+    --border-light: #333333;
     --brand: #ff7918;
     --brand-dark: #d54d02;
+    --brand-light: #f97316;
+    --brand-contrast: #ffffff;
     --success: #22c55e;
     --danger: #ef4444;
     --warning: #f59e0b;
     --teal: #14b8a6;
   }
-  :root[data-theme="light"] {
-    --background: #181818;
-    --background-sidebar: #1d1d1d;
-    --surface: #262626;
-    --border: #343434;
-    --text-primary: #f9f9f9;
-    --text-secondary: #b4b4bb;
+
+  /**
+   * Light mode — matches RideMesh Figma: orange primary, white surfaces, neutral borders/text.
+   */
+  html[data-theme="light"] {
+    --background: #ffffff;
+    --background-sidebar: #f5f5f5;
+    --surface: #ffffff;
+    --surface-variant: #f5f5f5;
+    --text-primary: #1a1a1a;
+    --text-secondary: #4a4a4a;
+    --text-muted: #9ca3af;
+    --border: #e5e7eb;
+    --border-light: #f3f4f6;
+    --brand: #ff7918;
+    --brand-dark: #d54d02;
+    --brand-light: #f97316;
+    --brand-contrast: #ffffff;
+    --success: #16a34a;
+    --danger: #dc2626;
+    --warning: #d97706;
+    --teal: #0d9488;
   }
+
   body {
     @apply bg-background text-text-primary antialiased;
   }

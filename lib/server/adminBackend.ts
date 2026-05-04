@@ -1,8 +1,10 @@
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { getAdminDb } from "@/lib/server/firebaseAdmin";
+import type { AdminNotificationFeedItem } from "@/lib/types/adminNotifications";
 import type { User } from "@/lib/types/user";
 import type { RideDetail, RideListItem, RideStatus } from "@/lib/types/ride";
-import type { SafetyAlert, IncidentDetails } from "@/lib/types/safety";
+import type { SafetyAlert } from "@/lib/types/safety";
 import type { DashboardMetrics } from "@/lib/types/metric";
 import type { RideReport, Severity, ReportStatus } from "@/lib/types/report";
 import type { CriticalAlert } from "@/lib/types/alert";
@@ -15,7 +17,7 @@ import { recentReports as fallbackReports } from "@/lib/mock/reports";
 import { liveLogs as fallbackLiveLogs } from "@/lib/mock/logs";
 import { mockUsers } from "@/lib/mock/users";
 import { mockRidesList, mockRideDetails, RIDE_MOD_STATS } from "@/lib/mock/rides";
-import { mockSafetyAlerts, mockIncidentDetails, ACTIVE_RESPONDERS_COUNT } from "@/lib/mock/safety";
+import { mockSafetyAlerts } from "@/lib/mock/safety";
 import { mockSystemLogs, systemStatusBar as fallbackSystemStatusBar, SERVICE_ID } from "@/lib/mock/system-logs";
 
 const AVATAR_COLORS: User["avatarColor"][] = ["orange", "purple", "teal", "green", "blue"];
@@ -50,6 +52,24 @@ function formatTime(value: unknown): string {
   return new Date(toMillis(value)).toISOString().slice(11, 19);
 }
 
+function alertCoordsFromDoc(data: Record<string, unknown>): { latitude?: number; longitude?: number } {
+  const latRaw = data.latitude;
+  const lngRaw = data.longitude;
+  if (typeof latRaw === "number" && typeof lngRaw === "number") {
+    return { latitude: latRaw, longitude: lngRaw };
+  }
+  const loc = data.location;
+  if (loc && typeof loc === "object") {
+    const o = loc as Record<string, unknown>;
+    const la = o.latitude ?? o._latitude;
+    const lo = o.longitude ?? o._longitude;
+    if (typeof la === "number" && typeof lo === "number") {
+      return { latitude: la, longitude: lo };
+    }
+  }
+  return {};
+}
+
 function colorFromId(id: string): User["avatarColor"] {
   const total = id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
   return AVATAR_COLORS[total % AVATAR_COLORS.length];
@@ -71,9 +91,12 @@ function parseResponseTimeMs(value: unknown): number {
 }
 
 function mapRideStatus(raw: string | undefined, reportCount: number): RideStatus {
+  const s = String(raw || "").toLowerCase();
+  if (s === "cancelled" || s === "canceled") return "cancelled";
+  if (s === "approved") return "approved";
   if (reportCount >= 4) return "flagged_ai";
   if (reportCount > 0) return "reported";
-  if (raw === "ongoing" || raw === "active") return "active";
+  if (s === "ongoing" || s === "active") return "active";
   return "under_review";
 }
 
@@ -211,8 +234,6 @@ export async function fetchRidesData(): Promise<{
 
 export async function fetchSafetyData(): Promise<{
   alerts: SafetyAlert[];
-  incidentDetails: Record<string, IncidentDetails>;
-  activeResponders: number;
 }> {
   try {
     const db = getAdminDb();
@@ -227,16 +248,17 @@ export async function fetchSafetyData(): Promise<{
     const rideLookup = new Map(ridesSnap.docs.map((doc) => [doc.id, doc.data()]));
 
     const alerts: SafetyAlert[] = [];
-    const incidentDetails: Record<string, IncidentDetails> = {};
 
     sosSnap.docs
       .filter((doc) => String(doc.data().status || "active") === "active")
       .forEach((doc) => {
         const data = doc.data();
+        const raw = data as Record<string, unknown>;
         const user = userLookup.get(String(data.userId || "")) || {};
         const ride = rideLookup.get(String(data.rideId || "")) || {};
         const userName = String(user.username || user.fullName || "Unknown User");
         const alertId = `sos-${doc.id}`;
+        const createdAtMs = toMillis(data.createdAt);
         alerts.push({
           id: alertId,
           type: "sos_critical",
@@ -246,38 +268,23 @@ export async function fetchSafetyData(): Promise<{
           vehicle: String(ride.vehicleType || "Unknown Vehicle"),
           alertMessage: "HIGH IMPACT DETECTED",
           alertIcon: "impact",
-          primaryButtonLabel: "Deploy Response",
-          primaryButtonIcon: "deploy",
           hasLiveIndicator: true,
           avatarColor: colorFromId(String(data.userId || doc.id)),
+          createdAtMs,
+          ...alertCoordsFromDoc(raw),
         });
-        incidentDetails[alertId] = {
-          alertId,
-          vehicleTelemetry: {
-            currentSpeed: "0 km/h (Stopped)",
-            gForceSpike: "4.1g",
-          },
-          emergencyContacts: Array.isArray(data.emergencyContacts) && data.emergencyContacts.length > 0
-            ? data.emergencyContacts.map((item: unknown) => {
-                const value = typeof item === "object" && item ? (item as Record<string, unknown>) : {};
-                return {
-                  name: String(value.name || "Emergency Contact"),
-                  relation: String(value.relation || "Contact"),
-                  phone: String(value.phone || "N/A"),
-                };
-              })
-            : [{ name: "Emergency Contact", relation: "Primary", phone: "N/A" }],
-        };
       });
 
     helpSnap.docs
       .filter((doc) => String(doc.data().status || "open") === "open")
       .forEach((doc) => {
         const data = doc.data();
+        const raw = data as Record<string, unknown>;
         const user = userLookup.get(String(data.userId || "")) || {};
         const ride = rideLookup.get(String(data.rideId || "")) || {};
         const userName = String(user.username || user.fullName || "Unknown User");
         const alertId = `help-${doc.id}`;
+        const createdAtMs = toMillis(data.createdAt);
         alerts.push({
           id: alertId,
           type: "help_signal",
@@ -287,31 +294,82 @@ export async function fetchSafetyData(): Promise<{
           vehicle: String(ride.vehicleType || "Unknown Vehicle"),
           alertMessage: String(data.message || "OFF-ROUTE WARNING").toUpperCase(),
           alertIcon: "warning",
-          primaryButtonLabel: "Contact Driver",
-          primaryButtonIcon: "phone",
           avatarColor: colorFromId(String(data.userId || doc.id)),
+          createdAtMs,
+          ...alertCoordsFromDoc(raw),
         });
-        incidentDetails[alertId] = {
-          alertId,
-          vehicleTelemetry: {
-            currentSpeed: "35 km/h",
-          },
-          emergencyContacts: [{ name: "Emergency Contact", relation: "Primary", phone: "N/A" }],
-        };
       });
 
-    const activeResponders = Math.max(1, Math.min(10, alerts.length || 1));
+    alerts.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
     return {
-      alerts: alerts.sort((a, b) => a.activeDuration.localeCompare(b.activeDuration)).slice(0, 100),
-      incidentDetails,
-      activeResponders,
+      alerts: alerts.slice(0, 100),
     };
   } catch {
     return {
       alerts: mockSafetyAlerts,
-      incidentDetails: mockIncidentDetails,
-      activeResponders: ACTIVE_RESPONDERS_COUNT,
     };
+  }
+}
+
+/** Shown in the host app when admin uses “Notify host” from Safety Alerts. */
+export const ADMIN_HOST_EMERGENCY_TITLE = "Emergency message from RideMesh Admin";
+export const ADMIN_HOST_EMERGENCY_BODY =
+  "A RideMesh administrator is contacting you about an active safety alert on your ride. Open the app and review your ride immediately. Follow any on-screen instructions.";
+
+function parseSafetyAlertId(alertId: string): { kind: "sos" | "help"; docId: string } | null {
+  if (alertId.startsWith("sos-")) return { kind: "sos", docId: alertId.slice(4) };
+  if (alertId.startsWith("help-")) return { kind: "help", docId: alertId.slice(5) };
+  return null;
+}
+
+/**
+ * Writes `adminHostNotifications` for the ride host. The consumer app should listen for
+ * documents where `hostId` matches the signed-in user and `severity` === `emergency`.
+ */
+export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: boolean; error?: string }> {
+  const parsed = parseSafetyAlertId(alertId);
+  if (!parsed) {
+    return {
+      ok: false,
+      error:
+        "This alert cannot message a host (invalid id or offline demo data). Use a live SOS or help signal from Firestore.",
+    };
+  }
+  try {
+    const db = getAdminDb();
+    const col = parsed.kind === "sos" ? db.collection("sosAlerts") : db.collection("helpSignals");
+    const signalSnap = await col.doc(parsed.docId).get();
+    if (!signalSnap.exists) {
+      return { ok: false, error: "Safety signal not found." };
+    }
+    const raw = signalSnap.data() as Record<string, unknown>;
+    const rideId = String(raw.rideId || "");
+    if (!rideId) {
+      return { ok: false, error: "No ride is linked to this alert." };
+    }
+    const rideSnap = await db.collection("rides").doc(rideId).get();
+    if (!rideSnap.exists) {
+      return { ok: false, error: "Ride not found." };
+    }
+    const hostId = String((rideSnap.data() as Record<string, unknown>)?.hostId || "");
+    if (!hostId) {
+      return { ok: false, error: "No host is assigned to this ride." };
+    }
+    await db.collection("adminHostNotifications").add({
+      hostId,
+      rideId,
+      alertId,
+      title: ADMIN_HOST_EMERGENCY_TITLE,
+      body: ADMIN_HOST_EMERGENCY_BODY,
+      severity: "emergency",
+      createdAt: FieldValue.serverTimestamp(),
+      source: "safety_alerts_console",
+      read: false,
+      dismissed: false,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Failed to notify host." };
   }
 }
 
@@ -358,7 +416,6 @@ export async function fetchDashboardData(): Promise<{
         sosSnap.size > 0
           ? `${sosSnap.size} unresolved SOS signals detected. Emergency protocols active.`
           : "Safety signal volume is stable across active trips.",
-      buttonLabel: "DEPLOY RESPONSE",
       count: sosSnap.size,
       sector: "LIVE",
     };
@@ -479,5 +536,94 @@ export async function fetchSystemLogsData(): Promise<{
     };
   } catch {
     return { logs: mockSystemLogs, status: fallbackSystemStatusBar, serviceId: SERVICE_ID };
+  }
+}
+
+export async function fetchAdminNotificationFeed(): Promise<AdminNotificationFeedItem[]> {
+  const items: AdminNotificationFeedItem[] = [];
+  try {
+    const db = getAdminDb();
+
+    const sosSnap = await db.collection("sosAlerts").orderBy("createdAt", "desc").limit(40).get();
+    sosSnap.docs.forEach((doc) => {
+      const data = doc.data();
+      const rideRef = String(data.rideId || doc.id);
+      const manual = String(data.reason || data.source || "").toLowerCase().includes("manual");
+      items.push({
+        id: `nf-sos-${doc.id}`,
+        title: manual ? "Manual SOS created" : "Emergency SOS created",
+        message: `SOS alert — ride ${rideRef.slice(0, 10)}… (${String(data.status || "active")}).`,
+        timestamp: formatRelativeTime(data.createdAt),
+        priority: "critical",
+        createdAtMs: toMillis(data.createdAt),
+      });
+    });
+
+    const helpSnap = await db.collection("helpSignals").orderBy("createdAt", "desc").limit(40).get();
+    helpSnap.docs.forEach((doc) => {
+      const data = doc.data();
+      items.push({
+        id: `nf-help-${doc.id}`,
+        title: "Help request created",
+        message: `${String(data.message || "User requested assistance")} · Ride ${String(data.rideId || "n/a")}.`,
+        timestamp: formatRelativeTime(data.createdAt),
+        priority: "high",
+        createdAtMs: toMillis(data.createdAt),
+      });
+    });
+
+    let deletionDocs: QueryDocumentSnapshot[] = [];
+    try {
+      const delSnap = await db.collection("accountDeletions").orderBy("createdAt", "desc").limit(40).get();
+      deletionDocs = delSnap.docs;
+    } catch {
+      try {
+        const nSnap = await db.collection("notifications").orderBy("createdAt", "desc").limit(200).get();
+        deletionDocs = nSnap.docs.filter((d) => {
+          const t = String(d.data().type || "").toLowerCase();
+          return (t.includes("account") && t.includes("delet")) || t === "user_deleted" || t === "account_deleted";
+        });
+      } catch {
+        deletionDocs = [];
+      }
+    }
+
+    deletionDocs.forEach((doc) => {
+      const data = doc.data();
+      const label = String(
+        data.email || data.userEmail || data.username || data.userName || data.userId || doc.id,
+      ).slice(0, 96);
+      items.push({
+        id: `nf-del-${doc.id}`,
+        title: "User deleted their account",
+        message: `Account deletion recorded for ${label}.`,
+        timestamp: formatRelativeTime(data.createdAt || data.requestedAt || data.deletedAt),
+        priority: "normal",
+        createdAtMs: toMillis(data.createdAt || data.requestedAt || data.deletedAt),
+      });
+    });
+
+    items.sort((a, b) => b.createdAtMs - a.createdAtMs);
+    return items.slice(0, 100);
+  } catch {
+    return [];
+  }
+}
+
+export async function moderateRide(
+  rideId: string,
+  action: "approve" | "cancel",
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const db = getAdminDb();
+    const status = action === "approve" ? "approved" : "cancelled";
+    await db.collection("rides").doc(rideId).update({
+      status,
+      adminModeratedAt: FieldValue.serverTimestamp(),
+      adminModerationAction: action,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

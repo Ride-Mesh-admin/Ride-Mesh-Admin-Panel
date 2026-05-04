@@ -1,5 +1,4 @@
 import type { SafetyAlert } from "@/lib/types/safety";
-import type { IncidentDetails } from "@/lib/types/safety";
 
 export const mockSafetyAlerts: SafetyAlert[] = [
   {
@@ -11,10 +10,11 @@ export const mockSafetyAlerts: SafetyAlert[] = [
     vehicle: "Tesla Model 3",
     alertMessage: "HIGH IMPACT DETECTED",
     alertIcon: "impact",
-    primaryButtonLabel: "Deploy Response",
-    primaryButtonIcon: "deploy",
     hasLiveIndicator: true,
     avatarColor: "orange",
+    latitude: 37.7699,
+    longitude: -122.4312,
+    createdAtMs: Date.now() - 3 * 60 * 1000,
   },
   {
     id: "2",
@@ -25,9 +25,10 @@ export const mockSafetyAlerts: SafetyAlert[] = [
     vehicle: "Toyota Camry",
     alertMessage: "OFF-ROUTE WARNING",
     alertIcon: "warning",
-    primaryButtonLabel: "Contact Driver",
-    primaryButtonIcon: "phone",
     avatarColor: "grey",
+    latitude: 37.7849,
+    longitude: -122.4094,
+    createdAtMs: Date.now() - 45 * 60 * 1000,
   },
   {
     id: "3",
@@ -38,37 +39,9 @@ export const mockSafetyAlerts: SafetyAlert[] = [
     vehicle: "Honda Civic",
     alertMessage: "AUDIO STREAM ACTIVE",
     alertIcon: "audio",
-    primaryButtonLabel: "Listen Live",
-    primaryButtonIcon: "headphone",
     avatarColor: "blue",
+    latitude: 37.7599,
+    longitude: -122.4377,
+    createdAtMs: Date.now() - 120 * 60 * 1000,
   },
 ];
-
-export const mockIncidentDetails: Record<string, IncidentDetails> = {
-  "1": {
-    alertId: "1",
-    vehicleTelemetry: {
-      currentSpeed: "0 km/h (Stopped)",
-      gForceSpike: "4.2g",
-    },
-    emergencyContacts: [
-      { name: "Linda Henderson", relation: "Mother", phone: "+1 (555) 123-3456" },
-    ],
-  },
-  "2": {
-    alertId: "2",
-    vehicleTelemetry: { currentSpeed: "45 km/h" },
-    emergencyContacts: [
-      { name: "John Jenkins", relation: "Spouse", phone: "+1 (555) 234-5678" },
-    ],
-  },
-  "3": {
-    alertId: "3",
-    vehicleTelemetry: { currentSpeed: "0 km/h (Stopped)" },
-    emergencyContacts: [
-      { name: "Emily Chen", relation: "Sister", phone: "+1 (555) 345-6789" },
-    ],
-  },
-};
-
-export const ACTIVE_RESPONDERS_COUNT = 2;

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Bell, Settings, User, CheckCircle2, Moon, Sun } from "lucide-react";
+import { Search, Bell, Settings, User, CheckCircle2, Moon, Sun, LogOut } from "lucide-react";
 import { RideMeshIcon } from "@/components/layout/RideMeshIcon";
 import { useAdminPanel } from "@/components/layout/AdminPanelProvider";
+import { adminLogoutAndRedirect } from "@/lib/client/adminLogout";
 
 type PanelName = "notifications" | "settings" | "profile" | null;
 
@@ -68,7 +69,7 @@ export function Header() {
     <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border bg-background px-6">
       <div className="flex items-center gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand">
-          <RideMeshIcon className="h-5 w-5 text-white" />
+          <RideMeshIcon className="h-5 w-5 text-brand-contrast" />
         </div>
         <div className="leading-tight">
           <p className="text-sm font-semibold text-text-primary">RideMesh Admin</p>
@@ -92,7 +93,7 @@ export function Header() {
         </span>
         <button
           type="button"
-          className="focus-ring relative rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-white"
+          className="focus-ring relative rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
           aria-label={notificationButtonLabel}
           onClick={() => setOpenPanel((prev) => (prev === "notifications" ? null : "notifications"))}
         >
@@ -101,7 +102,7 @@ export function Header() {
         </button>
         <button
           type="button"
-          className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-white"
+          className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
           aria-label="Settings"
           onClick={() => setOpenPanel((prev) => (prev === "settings" ? null : "settings"))}
         >
@@ -109,7 +110,7 @@ export function Header() {
         </button>
         <button
           type="button"
-          className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-white"
+          className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
           aria-label="Profile"
           onClick={() => setOpenPanel((prev) => (prev === "profile" ? null : "profile"))}
         >
@@ -129,6 +130,28 @@ export function Header() {
               </button>
             </div>
             <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+              {settings.pushNotifications &&
+                typeof Notification !== "undefined" &&
+                Notification.permission === "granted" && (
+                  <p className="mb-2 text-xs text-text-secondary">
+                    Desktop notifications are on for new account deletions, SOS, and help events. Turn push off to
+                    mirror them in this list.
+                  </p>
+                )}
+              {settings.pushNotifications &&
+                typeof Notification !== "undefined" &&
+                Notification.permission !== "granted" && (
+                  <p className="mb-2 text-xs text-text-secondary">
+                    Push is on but the browser has not allowed notifications yet — new events still appear in the list
+                    below. Allow notifications to also get desktop alerts.
+                  </p>
+                )}
+              {!settings.pushNotifications && notifications.length === 0 && (
+                <p className="mb-2 text-xs text-text-secondary">
+                  No items yet. Account deletions, emergency SOS, manual SOS, and help requests appear here when push
+                  notifications are off.
+                </p>
+              )}
               {notifications.map((item) => (
                 <button
                   key={item.id}
@@ -158,7 +181,7 @@ export function Header() {
                     type="button"
                     className={`focus-ring flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm ${
                       settings.theme === "light"
-                        ? "border-brand bg-brand text-white"
+                        ? "border-brand bg-brand text-brand-contrast"
                         : "border-border bg-surface text-text-secondary hover:text-text-primary"
                     }`}
                     onClick={() => updateSettings({ theme: "light" })}
@@ -170,7 +193,7 @@ export function Header() {
                     type="button"
                     className={`focus-ring flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm ${
                       settings.theme === "dark"
-                        ? "border-brand bg-brand text-white"
+                        ? "border-brand bg-brand text-brand-contrast"
                         : "border-border bg-surface text-text-secondary hover:text-text-primary"
                     }`}
                     onClick={() => updateSettings({ theme: "dark" })}
@@ -181,15 +204,6 @@ export function Header() {
                 </div>
               </div>
               <label className="flex items-center justify-between text-sm text-text-primary">
-                Email notifications
-                <input
-                  type="checkbox"
-                  checked={settings.emailNotifications}
-                  onChange={(event) => updateSettings({ emailNotifications: event.target.checked })}
-                  className="h-4 w-4 accent-brand"
-                />
-              </label>
-              <label className="flex items-center justify-between text-sm text-text-primary">
                 Push notifications
                 <input
                   type="checkbox"
@@ -198,15 +212,10 @@ export function Header() {
                   className="h-4 w-4 accent-brand"
                 />
               </label>
-              <label className="flex items-center justify-between text-sm text-text-primary">
-                Safety escalations only
-                <input
-                  type="checkbox"
-                  checked={settings.safetyEscalationsOnly}
-                  onChange={(event) => updateSettings({ safetyEscalationsOnly: event.target.checked })}
-                  className="h-4 w-4 accent-brand"
-                />
-              </label>
+              <p className="text-xs text-text-secondary">
+                When push is on and the browser allows it, new SOS, help requests, and account deletions use desktop
+                notifications. Otherwise those events stay in the bell menu.
+              </p>
             </div>
           </div>
         )}
@@ -242,10 +251,18 @@ export function Header() {
               <button
                 type="button"
                 onClick={saveProfile}
-                className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg bg-brand py-2.5 text-sm font-medium text-white hover:bg-brand-dark"
+                className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg bg-brand py-2.5 text-sm font-medium text-brand-contrast hover:bg-brand-dark"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Save Profile
+              </button>
+              <button
+                type="button"
+                onClick={() => void adminLogoutAndRedirect()}
+                className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg border border-border py-2.5 text-sm font-medium text-text-primary hover:bg-surface"
+              >
+                <LogOut className="h-4 w-4" />
+                Sign out
               </button>
               {saved && <p className="text-center text-xs text-success">Profile updated.</p>}
             </div>

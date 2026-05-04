@@ -13,6 +13,7 @@ import {
 import { NAV_ITEMS } from "@/lib/constants";
 import { RideMeshIcon } from "@/components/layout/RideMeshIcon";
 import { useAdminPanel } from "@/components/layout/AdminPanelProvider";
+import { adminLogoutAndRedirect } from "@/lib/client/adminLogout";
 
 const ICONS = [LayoutDashboard, Users, Car, AlertTriangle, FileText] as const;
 
@@ -24,7 +25,7 @@ export function Sidebar() {
     <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-border bg-background-sidebar">
       <div className="flex h-16 items-center gap-2 border-b border-border px-6">
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand">
-          <RideMeshIcon className="h-5 w-5 text-white" />
+          <RideMeshIcon className="h-5 w-5 text-brand-contrast" />
         </div>
         <span className="font-semibold text-text-primary">RideMesh Admin</span>
       </div>
@@ -38,14 +39,14 @@ export function Sidebar() {
               href={item.href}
               className={`focus-ring flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                 isActive
-                  ? "bg-brand text-white"
-                  : "text-text-secondary hover:bg-surface hover:text-white"
+                  ? "bg-brand text-brand-contrast"
+                  : "text-text-secondary hover:bg-surface hover:text-text-primary"
               }`}
             >
               <Icon className="h-5 w-5 shrink-0" />
               <span className="flex-1">{item.label}</span>
               {"badge" in item && item.badge !== undefined && (
-                <span className="rounded-full bg-brand px-2 py-0.5 text-xs font-medium text-white">
+                <span className="rounded-full bg-brand px-2 py-0.5 text-xs font-medium text-brand-contrast">
                   {item.badge}
                 </span>
               )}
@@ -55,7 +56,7 @@ export function Sidebar() {
       </nav>
       <div className="border-t border-border p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-semibold text-brand-contrast">
             {profile.initials}
           </div>
           <div className="min-w-0 flex-1">
@@ -64,8 +65,9 @@ export function Sidebar() {
           </div>
           <button
             type="button"
-            className="focus-ring rounded p-1 text-text-secondary hover:bg-surface hover:text-white"
+            className="focus-ring rounded p-1 text-text-secondary hover:bg-surface hover:text-text-primary"
             aria-label="Log out"
+            onClick={() => void adminLogoutAndRedirect()}
           >
             <LogOut className="h-4 w-4" />
           </button>

@@ -25,7 +25,7 @@ export function MetricCard({
         {label}
       </p>
       <div className="mt-2 flex items-end justify-between gap-2">
-        <span className="text-2xl font-bold text-white">{value}</span>
+        <span className="text-2xl font-bold text-text-primary">{value}</span>
         <div className="flex items-center gap-2">
           {showPulse && (
             <span className="relative flex h-3 w-3">

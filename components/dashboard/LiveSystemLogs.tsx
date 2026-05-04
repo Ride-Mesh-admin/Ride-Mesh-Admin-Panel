@@ -8,7 +8,7 @@ export function LiveSystemLogs({ logs }: LiveSystemLogsProps) {
   return (
     <div className="rounded-lg border border-border bg-surface p-5">
       <div className="mb-4 flex items-center gap-2">
-        <h3 className="font-bold text-white">LIVE SYSTEM LOGS</h3>
+        <h3 className="font-bold text-text-primary">LIVE SYSTEM LOGS</h3>
         <span className="relative flex h-2 w-2">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-brand" />
@@ -30,7 +30,7 @@ export function LiveSystemLogs({ logs }: LiveSystemLogsProps) {
       </ul>
       <button
         type="button"
-        className="focus-ring mt-4 w-full rounded-lg border border-border bg-background py-2.5 text-sm font-medium text-white hover:bg-surface"
+        className="focus-ring mt-4 w-full rounded-lg border border-border bg-background py-2.5 text-sm font-medium text-text-primary hover:bg-surface"
       >
         OPEN TERMINAL CONSOLE
       </button>
