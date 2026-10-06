@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Bell, Settings, User, CheckCircle2, Moon, Sun, LogOut } from "lucide-react";
-import { RideMeshIcon } from "@/components/layout/RideMeshIcon";
 import { useAdminPanel } from "@/components/layout/AdminPanelProvider";
 import { adminLogoutAndRedirect } from "@/lib/client/adminLogout";
 
@@ -66,14 +65,11 @@ export function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border bg-background px-6">
+    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border/80 bg-background/85 px-6 backdrop-blur-xl">
       <div className="flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand">
-          <RideMeshIcon className="h-5 w-5 text-brand-contrast" />
-        </div>
         <div className="leading-tight">
-          <p className="text-sm font-semibold text-text-primary">RideMesh Admin</p>
-          <p className="text-xs text-text-secondary">Operations Console</p>
+          <p className="text-sm font-semibold text-text-primary">Operations</p>
+          <p className="text-xs text-text-secondary">Console</p>
         </div>
       </div>
       <div className="flex flex-1 items-center justify-center">
@@ -81,19 +77,15 @@ export function Header() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
           <input
             type="search"
-            placeholder="Global search for users, rides, or reports..."
-            className="focus-ring w-full rounded-lg border border-border bg-surface py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder:text-text-secondary focus:border-brand"
+            placeholder="Search users, rides, or reports…"
+            className="focus-ring w-full rounded-xl border border-border bg-surface/80 py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder:text-text-secondary focus:border-brand"
           />
         </div>
       </div>
       <div className="relative flex items-center gap-3" ref={panelRef}>
-        <span className="flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1.5 text-xs font-medium text-success">
-          <span className="h-2 w-2 rounded-full bg-success" />
-          SYSTEMS NOMINAL
-        </span>
         <button
           type="button"
-          className="focus-ring relative rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
+          className="focus-ring relative rounded-xl p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
           aria-label={notificationButtonLabel}
           onClick={() => setOpenPanel((prev) => (prev === "notifications" ? null : "notifications"))}
         >
@@ -102,7 +94,7 @@ export function Header() {
         </button>
         <button
           type="button"
-          className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
+          className="focus-ring rounded-xl p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
           aria-label="Settings"
           onClick={() => setOpenPanel((prev) => (prev === "settings" ? null : "settings"))}
         >
@@ -110,7 +102,7 @@ export function Header() {
         </button>
         <button
           type="button"
-          className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
+          className="focus-ring rounded-xl p-2 text-text-secondary hover:bg-surface hover:text-text-primary"
           aria-label="Profile"
           onClick={() => setOpenPanel((prev) => (prev === "profile" ? null : "profile"))}
         >
@@ -118,7 +110,7 @@ export function Header() {
         </button>
 
         {openPanel === "notifications" && (
-          <div className="absolute right-0 top-12 w-[22rem] rounded-xl border border-border bg-background p-4 shadow-2xl">
+          <div className="absolute right-0 top-12 w-[22rem] rounded-2xl border border-border bg-background p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-text-primary">Notifications</h3>
               <button
@@ -130,26 +122,9 @@ export function Header() {
               </button>
             </div>
             <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-              {settings.pushNotifications &&
-                typeof Notification !== "undefined" &&
-                Notification.permission === "granted" && (
-                  <p className="mb-2 text-xs text-text-secondary">
-                    Desktop notifications are on for new account deletions, SOS, and help events. Turn push off to
-                    mirror them in this list.
-                  </p>
-                )}
-              {settings.pushNotifications &&
-                typeof Notification !== "undefined" &&
-                Notification.permission !== "granted" && (
-                  <p className="mb-2 text-xs text-text-secondary">
-                    Push is on but the browser has not allowed notifications yet — new events still appear in the list
-                    below. Allow notifications to also get desktop alerts.
-                  </p>
-                )}
-              {!settings.pushNotifications && notifications.length === 0 && (
+              {notifications.length === 0 && (
                 <p className="mb-2 text-xs text-text-secondary">
-                  No items yet. Account deletions, emergency SOS, manual SOS, and help requests appear here when push
-                  notifications are off.
+                  No items yet. SOS, help requests, and account deletions appear here.
                 </p>
               )}
               {notifications.map((item) => (
@@ -157,7 +132,7 @@ export function Header() {
                   key={item.id}
                   type="button"
                   onClick={() => markNotificationAsRead(item.id)}
-                  className={`focus-ring w-full rounded-lg border p-3 text-left transition-colors ${
+                  className={`focus-ring w-full rounded-xl border p-3 text-left transition-colors ${
                     item.read ? "border-border bg-surface/50" : "border-brand/40 bg-brand/10"
                   }`}
                 >
@@ -171,7 +146,7 @@ export function Header() {
         )}
 
         {openPanel === "settings" && (
-          <div className="absolute right-0 top-12 w-[22rem] rounded-xl border border-border bg-background p-4 shadow-2xl">
+          <div className="absolute right-0 top-12 w-[22rem] rounded-2xl border border-border bg-background p-4 shadow-2xl">
             <h3 className="mb-3 text-sm font-semibold text-text-primary">Admin Settings</h3>
             <div className="space-y-3">
               <div>
@@ -179,7 +154,7 @@ export function Header() {
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    className={`focus-ring flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+                    className={`focus-ring flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm ${
                       settings.theme === "light"
                         ? "border-brand bg-brand text-brand-contrast"
                         : "border-border bg-surface text-text-secondary hover:text-text-primary"
@@ -191,7 +166,7 @@ export function Header() {
                   </button>
                   <button
                     type="button"
-                    className={`focus-ring flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+                    className={`focus-ring flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm ${
                       settings.theme === "dark"
                         ? "border-brand bg-brand text-brand-contrast"
                         : "border-border bg-surface text-text-secondary hover:text-text-primary"
@@ -212,16 +187,12 @@ export function Header() {
                   className="h-4 w-4 accent-brand"
                 />
               </label>
-              <p className="text-xs text-text-secondary">
-                When push is on and the browser allows it, new SOS, help requests, and account deletions use desktop
-                notifications. Otherwise those events stay in the bell menu.
-              </p>
             </div>
           </div>
         )}
 
         {openPanel === "profile" && (
-          <div className="absolute right-0 top-12 w-[22rem] rounded-xl border border-border bg-background p-4 shadow-2xl">
+          <div className="absolute right-0 top-12 w-[22rem] rounded-2xl border border-border bg-background p-4 shadow-2xl">
             <h3 className="mb-3 text-sm font-semibold text-text-primary">Admin Profile</h3>
             <div className="space-y-3">
               <div>
@@ -232,7 +203,7 @@ export function Header() {
                   id="admin-name"
                   value={profileDraft.name}
                   onChange={(event) => setProfileDraft((prev) => ({ ...prev, name: event.target.value }))}
-                  className="focus-ring w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary"
+                  className="focus-ring w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary"
                 />
               </div>
               <div>
@@ -244,14 +215,14 @@ export function Header() {
                   type="email"
                   value={profileDraft.email}
                   onChange={(event) => setProfileDraft((prev) => ({ ...prev, email: event.target.value }))}
-                  className="focus-ring w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary"
+                  className="focus-ring w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary"
                 />
               </div>
               <p className="text-xs text-text-secondary">Role: {profile.role}</p>
               <button
                 type="button"
                 onClick={saveProfile}
-                className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg bg-brand py-2.5 text-sm font-medium text-brand-contrast hover:bg-brand-dark"
+                className="focus-ring flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-2.5 text-sm font-medium text-brand-contrast hover:bg-brand-dark"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Save Profile
@@ -259,7 +230,7 @@ export function Header() {
               <button
                 type="button"
                 onClick={() => void adminLogoutAndRedirect()}
-                className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg border border-border py-2.5 text-sm font-medium text-text-primary hover:bg-surface"
+                className="focus-ring flex w-full items-center justify-center gap-2 rounded-xl border border-border py-2.5 text-sm font-medium text-text-primary hover:bg-surface"
               >
                 <LogOut className="h-4 w-4" />
                 Sign out

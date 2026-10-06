@@ -21,6 +21,7 @@ const config: Config = {
         brand: "var(--brand)",
         "brand-dark": "var(--brand-dark)",
         "brand-light": "var(--brand-light)",
+        "brand-soft": "var(--brand-soft)",
         "brand-contrast": "var(--brand-contrast)",
         success: "var(--success)",
         danger: "var(--danger)",

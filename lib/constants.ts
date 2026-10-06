@@ -1,10 +1,13 @@
 export const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
-  { href: "/users", label: "User Management", icon: "Users" },
-  { href: "/rides", label: "Ride Moderation", icon: "Car" },
-  { href: "/safety-alerts", label: "Safety Alerts", icon: "AlertTriangle", badge: 12 },
+  { href: "/users", label: "Users", icon: "Users" },
+  { href: "/rides", label: "Rides", icon: "Car" },
+  { href: "/safety-alerts", label: "Safety", icon: "AlertTriangle" },
+  { href: "/newsletter", label: "Newsletter", icon: "Mail" },
   { href: "/system-logs", label: "System Logs", icon: "FileText" },
 ] as const;
+
+export const USERS_PER_PAGE = 5;
 
 export const SEVERITY_CONFIG = {
   high: { label: "High", color: "text-danger", dotColor: "bg-danger" },

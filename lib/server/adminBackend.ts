@@ -1,24 +1,27 @@
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { FieldValue } from "firebase-admin/firestore";
-import { getAdminDb } from "@/lib/server/firebaseAdmin";
+import { getAdminAuth, getAdminDb, probeFirebaseAdmin } from "@/lib/server/firebaseAdmin";
 import type { AdminNotificationFeedItem } from "@/lib/types/adminNotifications";
-import type { User } from "@/lib/types/user";
+import type { User, UserStatus } from "@/lib/types/user";
 import type { RideDetail, RideListItem, RideStatus } from "@/lib/types/ride";
 import type { SafetyAlert } from "@/lib/types/safety";
 import type { DashboardMetrics } from "@/lib/types/metric";
 import type { RideReport, Severity, ReportStatus } from "@/lib/types/report";
 import type { CriticalAlert } from "@/lib/types/alert";
 import type { LogEntry, SystemActivityLog, SystemStatusBar } from "@/lib/types/log";
-import {
-  dashboardMetrics as fallbackDashboardMetrics,
-} from "@/lib/mock/metrics";
-import { criticalAlert as fallbackCriticalAlert } from "@/lib/mock/alert";
-import { recentReports as fallbackReports } from "@/lib/mock/reports";
-import { liveLogs as fallbackLiveLogs } from "@/lib/mock/logs";
-import { mockUsers } from "@/lib/mock/users";
-import { mockRidesList, mockRideDetails, RIDE_MOD_STATS } from "@/lib/mock/rides";
-import { mockSafetyAlerts } from "@/lib/mock/safety";
-import { mockSystemLogs, systemStatusBar as fallbackSystemStatusBar, SERVICE_ID } from "@/lib/mock/system-logs";
+import type { NewsletterCampaign, NewsletterSubscriber } from "@/lib/types/newsletter";
+import { SERVICE_ID } from "@/lib/mock/system-logs";
+
+export type DataSource = "live" | "mock";
+
+export function getBackendHealth() {
+  const probe = probeFirebaseAdmin();
+  return {
+    firebase: probe.ok,
+    projectId: probe.projectId ?? null,
+    error: probe.error ?? null,
+  };
+}
 
 const AVATAR_COLORS: User["avatarColor"][] = ["orange", "purple", "teal", "green", "blue"];
 
@@ -106,7 +109,7 @@ function reportStatusFromSeverity(severity: Severity): ReportStatus {
   return "resolved";
 }
 
-export async function fetchUsersData(): Promise<{ users: User[]; total: number }> {
+export async function fetchUsersData(): Promise<{ users: User[]; total: number; source: DataSource }> {
   try {
     const db = getAdminDb();
     const snapshot = await db.collection("users").orderBy("createdAt", "desc").limit(1500).get();
@@ -125,9 +128,46 @@ export async function fetchUsersData(): Promise<{ users: User[]; total: number }
         avatarColor: colorFromId(doc.id),
       };
     });
-    return { users, total: users.length };
+    return { users, total: users.length, source: "live" };
   } catch {
-    return { users: mockUsers, total: mockUsers.length };
+    return { users: [], total: 0, source: "mock" };
+  }
+}
+
+export async function updateUserStatus(
+  userId: string,
+  status: UserStatus,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const db = getAdminDb();
+    const ref = db.collection("users").doc(userId);
+    const snap = await ref.get();
+    if (!snap.exists) return { ok: false, error: "User not found." };
+
+    const suspended = status === "suspended";
+    await ref.update({
+      status,
+      isSuspended: suspended,
+      disabled: suspended,
+      adminUpdatedAt: FieldValue.serverTimestamp(),
+    });
+
+    try {
+      await getAdminAuth().updateUser(userId, { disabled: suspended });
+    } catch {
+      // Auth user may not exist for every Firestore profile; profile update still succeeds.
+    }
+
+    await db.collection("systemLogs").add({
+      module: "USER_ADMIN",
+      severity: "info",
+      message: `User ${userId} marked ${status} by admin.`,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Failed to update user." };
   }
 }
 
@@ -135,6 +175,7 @@ export async function fetchRidesData(): Promise<{
   rides: RideListItem[];
   detailsById: Record<string, RideDetail>;
   stats: { activeRides: number; reported: number; moderatorsOnline: number };
+  source: DataSource;
 }> {
   try {
     const db = getAdminDb();
@@ -226,14 +267,20 @@ export async function fetchRidesData(): Promise<{
       moderatorsOnline: Math.max(1, Math.min(12, Math.floor(rides.length / 20) + 2)),
     };
 
-    return { rides, detailsById, stats };
+    return { rides, detailsById, stats, source: "live" };
   } catch {
-    return { rides: mockRidesList, detailsById: mockRideDetails, stats: RIDE_MOD_STATS };
+    return {
+      rides: [],
+      detailsById: {},
+      stats: { activeRides: 0, reported: 0, moderatorsOnline: 0 },
+      source: "mock",
+    };
   }
 }
 
 export async function fetchSafetyData(): Promise<{
   alerts: SafetyAlert[];
+  source: DataSource;
 }> {
   try {
     const db = getAdminDb();
@@ -303,10 +350,12 @@ export async function fetchSafetyData(): Promise<{
     alerts.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
     return {
       alerts: alerts.slice(0, 100),
+      source: "live",
     };
   } catch {
     return {
-      alerts: mockSafetyAlerts,
+      alerts: [],
+      source: "mock",
     };
   }
 }
@@ -378,6 +427,7 @@ export async function fetchDashboardData(): Promise<{
   metrics: DashboardMetrics;
   reports: RideReport[];
   liveLogs: LogEntry[];
+  source: DataSource;
 }> {
   try {
     const db = getAdminDb();
@@ -455,13 +505,33 @@ export async function fetchDashboardData(): Promise<{
           };
         });
 
-    return { criticalAlert, metrics, reports: reports.length ? reports : fallbackReports, liveLogs: liveLogs.length ? liveLogs : fallbackLiveLogs };
+    return {
+      criticalAlert,
+      metrics,
+      reports,
+      liveLogs,
+      source: "live",
+    };
   } catch {
     return {
-      criticalAlert: fallbackCriticalAlert,
-      metrics: fallbackDashboardMetrics,
-      reports: fallbackReports,
-      liveLogs: fallbackLiveLogs,
+      criticalAlert: {
+        title: "Unable to load safety status",
+        description: "Firebase connection failed. Retry shortly.",
+        count: 0,
+      },
+      metrics: {
+        totalUsers: 0,
+        totalUsersDelta: "0%",
+        activeRides: 0,
+        activeRidesLive: false,
+        openReports: 0,
+        openReportsPriority: "—",
+        sosAlerts: 0,
+        sosAlertsStatus: "—",
+      },
+      reports: [],
+      liveLogs: [],
+      source: "mock",
     };
   }
 }
@@ -470,6 +540,7 @@ export async function fetchSystemLogsData(): Promise<{
   logs: SystemActivityLog[];
   status: SystemStatusBar;
   serviceId: string;
+  source: DataSource;
 }> {
   try {
     const db = getAdminDb();
@@ -533,9 +604,20 @@ export async function fetchSystemLogsData(): Promise<{
       logs: logs.slice(0, 300),
       status,
       serviceId: projectId ? `RIDE-MESH-${projectId.toUpperCase()}` : SERVICE_ID,
+      source: "live",
     };
   } catch {
-    return { logs: mockSystemLogs, status: fallbackSystemStatusBar, serviceId: SERVICE_ID };
+    return {
+      logs: [],
+      status: {
+        apiSync: { status: "API SYNC OFFLINE", ok: false },
+        dbLoad: "DB LOAD: —",
+        uptime: "UPTIME: —",
+        memory: "—",
+      },
+      serviceId: SERVICE_ID,
+      source: "mock",
+    };
   }
 }
 
@@ -625,5 +707,243 @@ export async function moderateRide(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function fetchNewsletterData(): Promise<{
+  subscribers: NewsletterSubscriber[];
+  campaigns: NewsletterCampaign[];
+  source: DataSource;
+}> {
+  try {
+    const db = getAdminDb();
+    const [subsSnap, campaignsSnap] = await Promise.all([
+      db.collection("newsletterSubscribers").orderBy("createdAt", "desc").limit(2000).get(),
+      db.collection("newsletterCampaigns").orderBy("createdAt", "desc").limit(50).get(),
+    ]);
+
+    const subscribers: NewsletterSubscriber[] = subsSnap.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        email: String(data.email || doc.id),
+        source: String(data.source || "landing"),
+        subscribedAt: formatShortDate(data.createdAt),
+        createdAtMs: toMillis(data.createdAt),
+      };
+    });
+
+    const campaigns: NewsletterCampaign[] = campaignsSnap.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        subject: String(data.subject || ""),
+        preview: String(data.preview || data.body || "").slice(0, 160),
+        status: (String(data.status || "queued") as NewsletterCampaign["status"]),
+        recipientCount: Number(data.recipientCount || 0),
+        sentCount: Number(data.sentCount || 0),
+        failedCount: Number(data.failedCount || 0),
+        providerError: data.providerError ? String(data.providerError) : null,
+        createdAt: formatRelativeTime(data.createdAt),
+        createdAtMs: toMillis(data.createdAt),
+      };
+    });
+
+    return { subscribers, campaigns, source: "live" };
+  } catch {
+    return { subscribers: [], campaigns: [], source: "mock" };
+  }
+}
+
+async function deliverViaResend(opts: {
+  to: string[];
+  subject: string;
+  html: string;
+  text: string;
+}): Promise<{ sent: number; failed: number; error?: string }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL || "RideMesh <onboarding@resend.dev>";
+  const replyTo = process.env.RESEND_REPLY_TO || "support@ride-mesh.app";
+  const siteUrl = (process.env.NEWSLETTER_SITE_URL || "https://ride-mesh.app").replace(/\/$/, "");
+  if (!apiKey) {
+    return { sent: 0, failed: 0, error: "RESEND_API_KEY not configured" };
+  }
+
+  let sent = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  // Resend /emails accepts one primary recipient per request; send individually.
+  for (const email of opts.to) {
+    try {
+      const unsubscribePageUrl = `${siteUrl}/unsubscribe?email=${encodeURIComponent(email)}`;
+      const unsubscribeApiUrl = `${siteUrl}/api/newsletter/unsubscribe?email=${encodeURIComponent(email)}`;
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from,
+          to: [email],
+          reply_to: replyTo,
+          subject: opts.subject,
+          html: opts.html.replaceAll("{{UNSUBSCRIBE_URL}}", unsubscribePageUrl),
+          text: `${opts.text}\n\nUnsubscribe: ${unsubscribePageUrl}`,
+          headers: {
+            "List-Unsubscribe": `<${unsubscribeApiUrl}>, <mailto:${replyTo}?subject=unsubscribe>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+          tags: [{ name: "category", value: "newsletter" }],
+        }),
+      });
+
+      if (res.ok) {
+        sent += 1;
+        continue;
+      }
+
+      failed += 1;
+      const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+      const message = payload?.message || `Resend HTTP ${res.status}`;
+      if (!errors.includes(message)) errors.push(message);
+    } catch (err) {
+      failed += 1;
+      const message = err instanceof Error ? err.message : "Network error talking to Resend";
+      if (!errors.includes(message)) errors.push(message);
+    }
+  }
+
+  return {
+    sent,
+    failed,
+    error: errors.length ? errors.join(" · ") : undefined,
+  };
+}
+
+function buildNewsletterHtml(subject: string, body: string): string {
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((p) => `<p style="margin:0 0 16px;line-height:1.6;color:#1a1a1a;font-size:15px;">${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`)
+    .join("");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:24px auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <div style="padding:20px 24px;border-bottom:1px solid #f3f4f6;">
+      <p style="margin:0;color:#FF7918;font-weight:700;font-size:14px;">Ride Mesh</p>
+      <h1 style="margin:8px 0 0;color:#111827;font-size:20px;line-height:1.35;font-weight:700;">${escapeHtml(subject)}</h1>
+    </div>
+    <div style="padding:24px;">${paragraphs}</div>
+    <div style="padding:16px 24px 24px;border-top:1px solid #f3f4f6;">
+      <p style="margin:0 0 8px;color:#6b7280;font-size:12px;line-height:1.5;">
+        You’re receiving this because you subscribed on Ride Mesh.
+      </p>
+      <p style="margin:0 0 8px;color:#6b7280;font-size:12px;line-height:1.5;">
+        Ride Mesh · <a href="https://ride-mesh.app" style="color:#FF7918;text-decoration:underline;">ride-mesh.app</a>
+      </p>
+      <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.5;">
+        <a href="{{UNSUBSCRIBE_URL}}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export async function sendNewsletterCampaign(input: {
+  subject: string;
+  body: string;
+}): Promise<{ ok: boolean; campaignId?: string; sent?: number; failed?: number; queued?: boolean; error?: string }> {
+  const subject = input.subject.trim();
+  const body = input.body.trim();
+  if (subject.length < 3) return { ok: false, error: "Subject is too short." };
+  if (body.length < 10) return { ok: false, error: "Message body is too short." };
+
+  try {
+    const db = getAdminDb();
+    const subsSnap = await db.collection("newsletterSubscribers").get();
+    const recipients = subsSnap.docs
+      .map((doc) => String(doc.data().email || doc.id).trim().toLowerCase())
+      .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+
+    if (!recipients.length) {
+      return { ok: false, error: "No newsletter subscribers found." };
+    }
+
+    const html = buildNewsletterHtml(subject, body);
+    const text = `${subject}\n\n${body}\n\n— RideMesh`;
+
+    const campaignRef = await db.collection("newsletterCampaigns").add({
+      subject,
+      body,
+      preview: body.slice(0, 160),
+      status: "sending",
+      recipientCount: recipients.length,
+      sentCount: 0,
+      failedCount: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    const hasProvider = Boolean(process.env.RESEND_API_KEY);
+    if (!hasProvider) {
+      await campaignRef.update({
+        status: "queued",
+        sentCount: 0,
+        failedCount: 0,
+        note: "Queued — set RESEND_API_KEY and RESEND_FROM_EMAIL to deliver live email.",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      await db.collection("systemLogs").add({
+        module: "NEWSLETTER",
+        severity: "info",
+        message: `Campaign queued for ${recipients.length} subscribers (no email provider configured).`,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      return { ok: true, campaignId: campaignRef.id, sent: 0, failed: 0, queued: true };
+    }
+
+    const delivery = await deliverViaResend({ to: recipients, subject, html, text });
+    const status = delivery.failed === 0 ? "sent" : delivery.sent > 0 ? "partial" : "failed";
+    await campaignRef.update({
+      status,
+      sentCount: delivery.sent,
+      failedCount: delivery.failed,
+      providerError: delivery.error || null,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    await db.collection("systemLogs").add({
+      module: "NEWSLETTER",
+      severity: status === "failed" ? "error" : "info",
+      message: `Campaign ${campaignRef.id}: ${delivery.sent} sent, ${delivery.failed} failed.${delivery.error ? ` ${delivery.error}` : ""}`,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      ok: status !== "failed",
+      campaignId: campaignRef.id,
+      sent: delivery.sent,
+      failed: delivery.failed,
+      queued: false,
+      error: status === "failed" ? delivery.error || "Delivery failed." : undefined,
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Failed to send campaign." };
   }
 }

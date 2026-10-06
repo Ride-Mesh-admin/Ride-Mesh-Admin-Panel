@@ -49,7 +49,7 @@ const PUSH_SEEN_SESSION = "ridemesh_admin_push_seen_ids";
 const LEGACY_NOTIFICATIONS_KEY = "ridemesh_admin_notifications";
 
 const DEFAULT_SETTINGS: AdminSettings = {
-  theme: "dark",
+  theme: "light",
   pushNotifications: false,
 };
 

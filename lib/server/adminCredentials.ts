@@ -16,6 +16,15 @@ function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
+/** Shown on the login page in development only — not for production. */
+export function getDevAdminCredentials(): { email: string; password: string } | null {
+  if (process.env.NODE_ENV !== "development") return null;
+  return {
+    email: process.env.ADMIN_EMAIL || ADMIN_EMAIL_DEFAULT,
+    password: process.env.ADMIN_PASSWORD || ADMIN_PASSWORD_DEFAULT,
+  };
+}
+
 export function verifyAdminCredentials(email: string, password: string): boolean {
   const e = normalizeEmail(email);
   const want = adminEmail();

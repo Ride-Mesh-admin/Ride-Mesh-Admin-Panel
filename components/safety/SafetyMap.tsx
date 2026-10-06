@@ -7,7 +7,7 @@ const SafetyMapClient = dynamic(() => import("./SafetyMapClient"), {
   ssr: false,
   loading: () => (
     <div
-      className="relative h-full min-h-[200px] w-full max-h-full animate-pulse rounded-lg border border-border bg-[#1e2a2a]"
+      className="relative h-full min-h-[200px] w-full max-h-full animate-pulse rounded-lg border border-border bg-surface"
       aria-hidden
     />
   ),

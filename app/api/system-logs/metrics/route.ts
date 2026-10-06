@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Query, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { getAdminDb } from "@/lib/server/firebaseAdmin";
-import { systemLogsMetrics as fallbackMetrics } from "@/lib/mock/system-logs";
 import type { SystemLogsMetrics } from "@/lib/types/log";
 
 function parseMillis(raw: unknown): number | null {
@@ -71,7 +70,7 @@ function metricsFromLogs(logs: QueryDocumentSnapshot[], sinceMs: number): Pick<S
   const averageMs = latencyCount > 0 ? Math.round(latencySum / latencyCount) : null;
   return {
     totalErrors1h,
-    avgLatency: averageMs === null ? fallbackMetrics.avgLatency : `${averageMs}ms`,
+    avgLatency: averageMs === null ? "—" : `${averageMs}ms`,
   };
 }
 
@@ -89,10 +88,10 @@ export async function GET() {
     const previousStartDate = new Date(previousStartMs);
     const activeDriversStartDate = new Date(now - tenMinutesMs);
 
-    let totalErrors1h = fallbackMetrics.totalErrors1h;
-    let avgLatency = fallbackMetrics.avgLatency;
-    let totalErrorsPrevious = Math.max(1, Math.round(fallbackMetrics.totalErrors1h * 0.85));
-    let avgLatencyPrevious = Number.parseInt(fallbackMetrics.avgLatency.replace("ms", ""), 10);
+    let totalErrors1h = 0;
+    let avgLatency = "—";
+    let totalErrorsPrevious = 0;
+    let avgLatencyPrevious = 0;
 
     try {
       const logsSnapshot = await db
@@ -171,6 +170,18 @@ export async function GET() {
 
     return NextResponse.json(metrics, { status: 200 });
   } catch {
-    return NextResponse.json(fallbackMetrics, { status: 200 });
+    const empty: SystemLogsMetrics = {
+      totalErrors1h: 0,
+      totalErrorsDelta: "0%",
+      totalErrorsDeltaUp: false,
+      avgLatency: "—",
+      avgLatencyDelta: "0%",
+      avgLatencyDeltaUp: false,
+      requestsPerSec: 0,
+      requestsStatus: "—",
+      activeDrivers: 0,
+      activeDriversStatus: "—",
+    };
+    return NextResponse.json(empty, { status: 200 });
   }
 }

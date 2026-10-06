@@ -1,43 +1,61 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useEffect } from "react";
-import { Search, Filter } from "lucide-react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { Search } from "lucide-react";
 import { UserTable } from "@/components/users/UserTable";
-import { mockUsers, USERS_PER_PAGE } from "@/lib/mock/users";
-import type { User } from "@/lib/types/user";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { USERS_PER_PAGE } from "@/lib/constants";
+import type { User, UserStatus } from "@/lib/types/user";
 
 type RoleFilter = "all" | "host" | "rider";
 
+function UsersSkeleton() {
+  return (
+    <div className="space-y-3" aria-busy="true" aria-label="Loading users">
+      <Skeleton className="h-12 w-full" />
+      {Array.from({ length: 8 }).map((_, i) => (
+        <Skeleton key={i} className="h-14 w-full" />
+      ))}
+    </div>
+  );
+}
+
 export default function UsersPage() {
-  const [users, setUsers] = useState<User[]>(mockUsers);
-  const [totalUsersCount, setTotalUsersCount] = useState<number>(mockUsers.length);
+  const [users, setUsers] = useState<User[]>([]);
+  const [totalUsersCount, setTotalUsersCount] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [page, setPage] = useState(1);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const loadUsers = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/users", { cache: "no-store", credentials: "include" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { users: User[]; total: number; source?: "live" | "mock" };
+      setUsers(payload.users);
+      setTotalUsersCount(payload.total);
+    } catch {
+      // Keep empty until a successful load.
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
-    async function loadUsers() {
-      try {
-        const response = await fetch("/api/admin/users", { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as { users: User[]; total: number };
-        if (isMounted) {
-          setUsers(payload.users);
-          setTotalUsersCount(payload.total);
-        }
-      } catch {
-        // Keep fallback.
-      }
+    async function tick() {
+      if (!isMounted) return;
+      await loadUsers();
     }
-    void loadUsers();
-    const timer = window.setInterval(loadUsers, 45000);
+    void tick();
+    const timer = window.setInterval(tick, 45000);
     return () => {
       isMounted = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [loadUsers]);
 
   const filteredUsers = useMemo(() => {
     let list = users;
@@ -49,7 +67,7 @@ export default function UsersPage() {
         (u) =>
           u.username.toLowerCase().includes(q) ||
           u.email.toLowerCase().includes(q) ||
-          u.id.toLowerCase().includes(q)
+          u.id.toLowerCase().includes(q),
       );
     }
     return list;
@@ -60,29 +78,53 @@ export default function UsersPage() {
   const end = Math.min(page * USERS_PER_PAGE, filteredUsers.length);
   const pagedUsers = filteredUsers.slice((page - 1) * USERS_PER_PAGE, page * USERS_PER_PAGE);
 
+  async function handleStatusChange(userId: string, status: UserStatus) {
+    setActionError(null);
+    const res = await fetch("/api/admin/users", {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, status }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    if (!res.ok || !data.ok) {
+      setActionError(data.error || "Could not update user.");
+      return;
+    }
+    setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, status } : u)));
+  }
+
   return (
     <div className="space-y-6">
-      {/* Page header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold text-text-primary">User Management</h1>
-          <span className="flex items-center gap-2 text-sm text-text-secondary">
-            <span className="h-2 w-2 rounded-full bg-success" />
-            LIVE: {totalUsersCount.toLocaleString()} USERS
-          </span>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-text-primary">Users</h1>
+          <p className="mt-1 text-sm text-text-secondary">
+            Manage rider and host accounts from Firestore.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!loading && (
+            <span className="flex items-center gap-2 text-sm text-text-secondary">
+              <span className="h-2 w-2 rounded-full bg-success" />
+              {totalUsersCount.toLocaleString()} users
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Search and filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" />
           <input
             type="search"
-            placeholder="Search by username, email, or ID..."
+            placeholder="Search by username, email, or ID…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="focus-ring w-full rounded-lg border border-border bg-surface py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder:text-text-secondary focus:border-brand"
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            className="focus-ring w-full rounded-xl border border-border bg-surface py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder:text-text-secondary focus:border-brand"
           />
         </div>
         <div className="flex items-center gap-2">
@@ -94,10 +136,13 @@ export default function UsersPage() {
               <button
                 key={key}
                 type="button"
-                onClick={() => setRoleFilter(value)}
+                onClick={() => {
+                  setRoleFilter(value);
+                  setPage(1);
+                }}
                 className={`focus-ring rounded-full px-4 py-2 text-sm font-medium transition-colors ${
                   isActive
-                    ? "bg-surface text-text-primary border border-border"
+                    ? "border border-brand/40 bg-brand/15 text-brand"
                     : "border border-border bg-transparent text-text-primary hover:bg-surface/80"
                 }`}
               >
@@ -105,84 +150,46 @@ export default function UsersPage() {
               </button>
             );
           })}
-          <button
-            type="button"
-            className="focus-ring flex items-center gap-2 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-primary hover:bg-border/50"
-          >
-            <Filter className="h-4 w-4" />
-            Filters
-          </button>
         </div>
       </div>
 
-      {/* Table */}
-      <UserTable users={pagedUsers} />
+      {actionError && (
+        <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{actionError}</p>
+      )}
 
-      {/* Pagination */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-text-secondary">
-          SHOWING {filteredUsers.length === 0 ? 0 : start}-{end} OF {filteredUsers.length.toLocaleString()} USERS
-        </p>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-            className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-            aria-label="Previous page"
-          >
-            <span className="sr-only">Previous</span>
-            <span aria-hidden>&lt;</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(1)}
-            className={`focus-ring min-w-[2.25rem] rounded-lg py-2 px-2.5 text-sm font-medium ${
-              page === 1 ? "bg-brand text-brand-contrast" : "text-text-primary hover:bg-surface"
-            }`}
-          >
-            1
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(2)}
-            className={`focus-ring min-w-[2.25rem] rounded-lg py-2 px-2.5 text-sm font-medium ${
-              page === 2 ? "bg-brand text-brand-contrast" : "text-text-primary hover:bg-surface"
-            }`}
-          >
-            2
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(3)}
-            className={`focus-ring min-w-[2.25rem] rounded-lg py-2 px-2.5 text-sm font-medium ${
-              page === 3 ? "bg-brand text-brand-contrast" : "text-text-primary hover:bg-surface"
-            }`}
-          >
-            3
-          </button>
-          <span className="px-2 text-text-secondary">...</span>
-          <button
-            type="button"
-            onClick={() => setPage(totalPages)}
-            className={`focus-ring min-w-[2.25rem] rounded-lg py-2 px-2.5 text-sm font-medium ${
-              page === totalPages ? "bg-brand text-brand-contrast" : "text-text-primary hover:bg-surface"
-            }`}
-          >
-            {totalPages}
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            className="focus-ring rounded-lg p-2 text-text-secondary hover:bg-surface hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-            aria-label="Next page"
-          >
-            <span className="sr-only">Next</span>
-            <span aria-hidden>&gt;</span>
-          </button>
-        </div>
-      </div>
+      {loading ? (
+        <UsersSkeleton />
+      ) : (
+        <>
+          <UserTable users={pagedUsers} onStatusChange={handleStatusChange} />
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-text-secondary">
+              Showing {filteredUsers.length === 0 ? 0 : start}-{end} of {filteredUsers.length.toLocaleString()}
+            </p>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="focus-ring rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-surface disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <span className="px-3 text-sm text-text-primary">
+                {page} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="focus-ring rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-surface disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

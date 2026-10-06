@@ -5,7 +5,7 @@ import { Search, ChevronDown, List, LayoutGrid, RefreshCw } from "lucide-react";
 import { RideListTable } from "@/components/rides/RideListTable";
 import { RideCardGrid } from "@/components/rides/RideCardGrid";
 import { RideDetailPanel } from "@/components/rides/RideDetailPanel";
-import { mockRidesList, mockRideDetails, RIDE_MOD_STATS } from "@/lib/mock/rides";
+import { Skeleton } from "@/components/ui/Skeleton";
 import type { RideStatus, RideListItem, RideDetail } from "@/lib/types/ride";
 
 const STATUS_OPTIONS: { value: "all" | RideStatus; label: string }[] = [
@@ -18,14 +18,32 @@ const STATUS_OPTIONS: { value: "all" | RideStatus; label: string }[] = [
   { value: "cancelled", label: "Cancelled" },
 ];
 
+const EMPTY_STATS = { activeRides: 0, reported: 0, moderatorsOnline: 0 };
+
+function RidesSkeleton() {
+  return (
+    <div className="space-y-3" aria-busy="true" aria-label="Loading rides">
+      <div className="mb-6 flex gap-6">
+        <Skeleton className="h-14 w-28" />
+        <Skeleton className="h-14 w-28" />
+        <Skeleton className="h-14 w-28" />
+      </div>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <Skeleton key={i} className="h-16 w-full" />
+      ))}
+    </div>
+  );
+}
+
 export default function RidesPage() {
-  const [rides, setRides] = useState<RideListItem[]>(mockRidesList);
-  const [rideDetails, setRideDetails] = useState<Record<string, RideDetail>>(mockRideDetails);
-  const [rideStats, setRideStats] = useState(RIDE_MOD_STATS);
+  const [rides, setRides] = useState<RideListItem[]>([]);
+  const [rideDetails, setRideDetails] = useState<Record<string, RideDetail>>({});
+  const [rideStats, setRideStats] = useState(EMPTY_STATS);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | RideStatus>("all");
   const [listView, setListView] = useState(true);
-  const [selectedRideId, setSelectedRideId] = useState<string | null>(mockRidesList[0]?.id ?? null);
+  const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
   const [moderatingId, setModeratingId] = useState<string | null>(null);
   const [queueRefreshing, setQueueRefreshing] = useState(false);
   const [lastQueueSyncAt, setLastQueueSyncAt] = useState<number | null>(null);
@@ -62,6 +80,7 @@ export default function RidesPage() {
     } catch {
       if (opts?.manual) setQueueRefreshError("Network error — try again.");
     } finally {
+      setLoading(false);
       if (opts?.manual) setQueueRefreshing(false);
     }
   }, []);
@@ -121,6 +140,14 @@ export default function RidesPage() {
   }, [search, statusFilter, rides]);
 
   const selectedDetail = selectedRideId ? rideDetails[selectedRideId] ?? null : null;
+
+  if (loading) {
+    return (
+      <div className="flex h-full flex-col">
+        <RidesSkeleton />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">

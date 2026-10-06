@@ -3,12 +3,11 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { AlertCard } from "@/components/safety/AlertCard";
 import { SafetyMap } from "@/components/safety/SafetyMap";
-import { mockSafetyAlerts } from "@/lib/mock/safety";
+import { Skeleton } from "@/components/ui/Skeleton";
 import type { SafetyAlert } from "@/lib/types/safety";
 
 type FilterTab = "all" | "sos_only" | "help_signals" | "resolved";
 
-/** Leaflet map viewport on Safety Alerts (max height cap + responsive height). */
 const SAFETY_MAP_MAX_HEIGHT_PX = 560;
 const SAFETY_MAP_MIN_HEIGHT_PX = 320;
 
@@ -17,10 +16,29 @@ function formatUTC(): string {
   return now.toISOString().slice(11, 19) + " UTC";
 }
 
+function SafetySkeleton() {
+  return (
+    <div className="flex min-h-[500px] flex-col gap-4 lg:flex-row" aria-busy="true" aria-label="Loading safety alerts">
+      <div className="w-full shrink-0 space-y-3 lg:w-[380px]">
+        <div className="mb-3 flex gap-2">
+          <Skeleton className="h-9 w-24 rounded-full" />
+          <Skeleton className="h-9 w-24 rounded-full" />
+          <Skeleton className="h-9 w-28 rounded-full" />
+        </div>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-36 w-full" />
+        ))}
+      </div>
+      <Skeleton className="min-h-[320px] w-full flex-1" style={{ maxHeight: SAFETY_MAP_MAX_HEIGHT_PX }} />
+    </div>
+  );
+}
+
 export default function SafetyAlertsPage() {
-  const [alerts, setAlerts] = useState<SafetyAlert[]>(mockSafetyAlerts);
+  const [alerts, setAlerts] = useState<SafetyAlert[]>([]);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterTab>("all");
-  const [selectedId, setSelectedId] = useState<string | null>(mockSafetyAlerts[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [utcTime, setUtcTime] = useState(formatUTC());
   const [notifyingId, setNotifyingId] = useState<string | null>(null);
   const [notifyErrorByAlertId, setNotifyErrorByAlertId] = useState<Record<string, string>>({});
@@ -36,7 +54,9 @@ export default function SafetyAlertsPage() {
           setAlerts(payload.alerts);
         }
       } catch {
-        // Keep fallback.
+        // Keep empty until a successful load.
+      } finally {
+        if (isMounted) setLoading(false);
       }
     }
     void loadAlerts();
@@ -126,48 +146,58 @@ export default function SafetyAlertsPage() {
         <span className="text-sm text-text-secondary">{utcTime}</span>
       </div>
 
-      <div className="flex min-h-[500px] flex-col gap-4 lg:flex-row">
-        <div className="w-full shrink-0 lg:w-[380px]">
-          <div className="mb-3 flex gap-2">
-            {tabs.map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setFilter(key)}
-                className={`focus-ring rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                  filter === key ? "bg-brand text-brand-contrast" : "bg-surface text-text-secondary hover:text-text-primary"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+      {loading ? (
+        <SafetySkeleton />
+      ) : (
+        <div className="flex min-h-[500px] flex-col gap-4 lg:flex-row">
+          <div className="w-full shrink-0 lg:w-[380px]">
+            <div className="mb-3 flex gap-2">
+              {tabs.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFilter(key)}
+                  className={`focus-ring rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                    filter === key ? "bg-brand text-brand-contrast" : "bg-surface text-text-secondary hover:text-text-primary"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="space-y-3 overflow-y-auto pr-2">
+              {filteredAlerts.length === 0 ? (
+                <p className="rounded-xl border border-border bg-surface px-4 py-8 text-center text-sm text-text-secondary">
+                  No active safety alerts from Firebase.
+                </p>
+              ) : (
+                filteredAlerts.map((alert) => (
+                  <AlertCard
+                    key={alert.id}
+                    alert={alert}
+                    isSelected={selectedId === alert.id}
+                    onSelect={() => setSelectedId(alert.id)}
+                    onNotifyHost={handleNotifyHost}
+                    notifyingId={notifyingId}
+                    notifyErrorMessage={notifyErrorByAlertId[alert.id] ?? null}
+                  />
+                ))
+              )}
+            </div>
           </div>
-          <div className="space-y-3 overflow-y-auto pr-2">
-            {filteredAlerts.map((alert) => (
-              <AlertCard
-                key={alert.id}
-                alert={alert}
-                isSelected={selectedId === alert.id}
-                onSelect={() => setSelectedId(alert.id)}
-                onNotifyHost={handleNotifyHost}
-                notifyingId={notifyingId}
-                notifyErrorMessage={notifyErrorByAlertId[alert.id] ?? null}
-              />
-            ))}
-          </div>
-        </div>
 
-        <div
-          className="relative w-full flex-1 overflow-hidden lg:min-w-0"
-          style={{
-            minHeight: SAFETY_MAP_MIN_HEIGHT_PX,
-            maxHeight: SAFETY_MAP_MAX_HEIGHT_PX,
-            height: `min(${SAFETY_MAP_MAX_HEIGHT_PX}px, 65vh)`,
-          }}
-        >
-          <SafetyMap alerts={alerts} selectedAlertId={selectedId} />
+          <div
+            className="relative w-full flex-1 overflow-hidden lg:min-w-0"
+            style={{
+              minHeight: SAFETY_MAP_MIN_HEIGHT_PX,
+              maxHeight: SAFETY_MAP_MAX_HEIGHT_PX,
+              height: `min(${SAFETY_MAP_MAX_HEIGHT_PX}px, 65vh)`,
+            }}
+          >
+            <SafetyMap alerts={filteredAlerts} selectedAlertId={selectedId} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

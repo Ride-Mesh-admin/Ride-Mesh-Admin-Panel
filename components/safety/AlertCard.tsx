@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
-import { AlertTriangle, Headphones, Check, Megaphone } from "lucide-react";
+import { Check, Megaphone } from "lucide-react";
+import { SosIcon, HelpIcon, WarningIcon } from "@/components/icons/AppIcons";
 import type { SafetyAlert } from "@/lib/types/safety";
 import { SAFETY_ALERT_TYPE_CONFIG } from "@/lib/constants";
 
@@ -10,7 +11,6 @@ interface AlertCardProps {
   onSelect: () => void;
   onNotifyHost: (alert: SafetyAlert) => void | Promise<void>;
   notifyingId?: string | null;
-  /** Server or network error message for this card’s last notify attempt */
   notifyErrorMessage?: string | null;
 }
 
@@ -21,8 +21,9 @@ function getInitials(name: string): string {
 
 function MessageIcon({ icon }: { icon: "impact" | "warning" | "audio" }) {
   const cls = icon === "impact" ? "text-danger" : icon === "warning" ? "text-warning" : "text-blue-400";
-  if (icon === "audio") return <Headphones className={`h-4 w-4 ${cls}`} />;
-  return <AlertTriangle className={`h-4 w-4 ${cls}`} />;
+  if (icon === "audio") return <HelpIcon size={16} className={cls} />;
+  if (icon === "impact") return <SosIcon size={16} className={cls} />;
+  return <WarningIcon size={16} className={cls} />;
 }
 
 export function AlertCard({
@@ -44,7 +45,9 @@ export function AlertCard({
       tabIndex={0}
       onClick={onSelect}
       onKeyDown={(e) => e.key === "Enter" && onSelect()}
-      className={`focus-ring cursor-pointer rounded-lg border p-4 ${isSelected ? "border-brand bg-brand/10" : "border-border bg-surface hover:border-border/80"}`}
+      className={`focus-ring feature-card-glow cursor-pointer rounded-2xl border p-4 transition ${
+        isSelected ? "border-brand bg-brand-soft" : "border-border bg-surface hover:border-brand/40"
+      }`}
     >
       <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${config.badgeClass}`}>
         {config.label}
@@ -52,16 +55,22 @@ export function AlertCard({
       <p className="mb-3 mt-2 text-xs text-text-secondary">ACTIVE: {alert.activeDuration}</p>
       <div className="mb-3 flex items-center gap-3">
         <div className="relative shrink-0">
-          <div className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold ${avatarText} ${avatarBg}`}>
+          <div
+            className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold ${avatarText} ${avatarBg} ${
+              alert.type === "sos_critical" ? "shadow-[0_0_16px_rgba(255,121,24,0.45)]" : ""
+            }`}
+          >
             {getInitials(alert.userName)}
           </div>
           {alert.hasLiveIndicator && (
-            <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-surface bg-success" />
+            <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-soft-pulse rounded-full border-2 border-surface bg-success" />
           )}
         </div>
         <div className="min-w-0 flex-1">
           <p className="font-medium text-text-primary">{alert.userName}</p>
-          <p className="text-xs text-text-secondary">Trip ID: {alert.tripId} • {alert.vehicle}</p>
+          <p className="text-xs text-text-secondary">
+            Trip ID: {alert.tripId} • {alert.vehicle}
+          </p>
         </div>
       </div>
       <div className={`mb-4 flex items-center gap-2 ${config.messageIconColor}`}>
@@ -81,7 +90,7 @@ export function AlertCard({
             e.stopPropagation();
             void onNotifyHost(alert);
           }}
-          className="focus-ring flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-brand py-2 text-sm font-medium text-brand-contrast hover:bg-brand-dark disabled:opacity-50"
+          className="focus-ring brand-surface-glow flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-brand py-2 text-sm font-medium text-brand-contrast hover:bg-brand-dark disabled:opacity-50"
         >
           <Megaphone className={`h-3.5 w-3.5 shrink-0 ${busy ? "animate-pulse" : ""}`} aria-hidden />
           {busy ? "Sending…" : "Notify host"}
@@ -89,7 +98,7 @@ export function AlertCard({
         <button
           type="button"
           onClick={(e) => e.stopPropagation()}
-          className="focus-ring flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-text-primary hover:bg-border/50"
+          className="focus-ring flex items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-2 text-sm font-medium text-text-primary hover:bg-brand-soft hover:text-brand"
         >
           <Check className="h-3.5 w-3.5" />
           Mark Resolved
