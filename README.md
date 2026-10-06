@@ -93,6 +93,7 @@ Copy `.env.example` → `.env.local`. Never commit real secrets.
 | `ADMIN_EMAIL` | **Yes (prod)** | Admin login email |
 | `ADMIN_PASSWORD` | **Yes (prod)** | Admin login password |
 | `ADMIN_SESSION_SECRET` | **Yes (prod)** | Long random string for JWT signing |
+| `ADMIN_APP_URL` | Recommended | e.g. `https://admin.ride-mesh.app` (reset email links) |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Recommended | Safety Operations map |
 | `RESEND_API_KEY` | Optional | Live newsletter sending |
 | `RESEND_FROM_EMAIL` | Optional | e.g. `RideMesh <support@your-domain.com>` |
@@ -142,12 +143,14 @@ middleware.ts       # Session gate for pages + APIs
 
 ## Auth model
 
-1. `POST /api/admin/login` verifies email/password (timing-safe compare).
-2. Server issues a **30-day** HS256 JWT stored in the `ridemesh_admin_session` httpOnly cookie.
-3. `middleware.ts` blocks unauthenticated page and API access (except login/logout).
-4. `POST /api/admin/logout` clears the cookie.
+1. On first successful auth path, the admin account is bootstrapped into Firestore (`adminAccounts/primary`) from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (or local defaults).
+2. Passwords are stored with **scrypt** hashes — never plaintext after bootstrap.
+3. `POST /api/admin/login` verifies against the hashed Firestore account.
+4. Server issues a **30-day** HS256 JWT in the `ridemesh_admin_session` httpOnly cookie.
+5. `/account` lets the signed-in admin update profile and password.
+6. Forgot password: `/forgot-password` emails a one-hour reset link via **Resend** (set `RESEND_API_KEY` + `ADMIN_APP_URL`).
 
-This is a **shared ops password**, not multi-admin Firebase Auth. Set strong unique `ADMIN_*` values and `ADMIN_SESSION_SECRET` in every production environment.
+Set strong unique bootstrap credentials and `ADMIN_SESSION_SECRET` in every production environment. After the first deploy, change the password under **Account**.
 
 ---
 

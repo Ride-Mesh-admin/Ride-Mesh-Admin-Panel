@@ -4,7 +4,14 @@ export type RideStatus =
   | "reported"
   | "flagged_ai"
   | "approved"
-  | "cancelled";
+  | "cancelled"
+  | "blacklisted";
+
+export interface RideSafetySignals {
+  sosCount: number;
+  helpCount: number;
+  total: number;
+}
 
 export interface RideListItem {
   id: string;
@@ -14,9 +21,12 @@ export interface RideListItem {
   postedAgo: string;
   hostName: string;
   hostAvatarColor: string;
+  hostPhotoURL?: string;
   hostRating: number;
   reportCount: number;
+  safetySignals: RideSafetySignals;
   status: RideStatus;
+  isBlacklisted?: boolean;
 }
 
 export interface ReportLogEntry {
@@ -41,6 +51,8 @@ export interface RideDetail {
   pickup: string;
   dropoff: string;
   reportCount: number;
+  safetySignals: RideSafetySignals;
   reportLogs: ReportLogEntry[];
   hostReputation: HostReputation;
+  isBlacklisted?: boolean;
 }

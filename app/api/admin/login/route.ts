@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAdminCredentials } from "@/lib/server/adminCredentials";
+import { verifyAdminCredentials } from "@/lib/server/adminAccount";
 import { ADMIN_SESSION_COOKIE, createAdminSessionToken } from "@/lib/server/adminSession";
 
 export async function POST(request: Request) {
@@ -11,7 +11,8 @@ export async function POST(request: Request) {
   }
   const email = String(body.email || "");
   const password = String(body.password || "");
-  if (!verifyAdminCredentials(email, password)) {
+  const valid = await verifyAdminCredentials(email, password);
+  if (!valid) {
     return NextResponse.json({ ok: false, error: "Invalid email or password" }, { status: 401 });
   }
   const token = await createAdminSessionToken();

@@ -112,6 +112,12 @@ export default function SafetyMapClient({
     setInfoWindowAlertId(alertId);
   }, []);
 
+  const infoAlert = useMemo(
+    () => (infoWindowAlertId ? alerts.find((a) => a.id === infoWindowAlertId) ?? null : null),
+    [alerts, infoWindowAlertId],
+  );
+  const infoPosition = infoAlert ? positions.get(infoAlert.id) : undefined;
+
   if (alerts.length === 0) {
     return (
       <div className="flex h-full min-h-[200px] w-full max-h-full items-center justify-center rounded-lg border border-border bg-surface text-sm text-text-secondary">
@@ -163,7 +169,6 @@ export default function SafetyMapClient({
           const position = positions.get(alert.id);
           if (!position) return null;
           const selected = selectedAlertId === alert.id;
-          const showInfo = infoWindowAlertId === alert.id;
           const color = alertMarkerColor(alert.type);
 
           return (
@@ -174,19 +179,22 @@ export default function SafetyMapClient({
               icon={markerIcon(color, selected)}
               onClick={() => onMarkerClick(alert.id)}
               zIndex={selected ? 2 : 1}
-            >
-              {showInfo ? (
-                <InfoWindowF onCloseClick={() => setInfoWindowAlertId(null)}>
-                  <div className="min-w-[140px] pr-1 text-neutral-900">
-                    <p className="text-sm font-semibold">{alertMarkerLabel(alert)}</p>
-                    <p className="mt-0.5 text-xs text-neutral-600">{alert.tripId}</p>
-                    <p className="mt-1 text-xs text-neutral-500">{alert.alertMessage}</p>
-                  </div>
-                </InfoWindowF>
-              ) : null}
-            </MarkerF>
+            />
           );
         })}
+        {infoAlert && infoPosition ? (
+          <InfoWindowF
+            position={infoPosition}
+            onCloseClick={() => setInfoWindowAlertId(null)}
+            options={{ pixelOffset: new google.maps.Size(0, -12) }}
+          >
+            <div className="min-w-[140px] pr-1 text-neutral-900">
+              <p className="text-sm font-semibold">{alertMarkerLabel(infoAlert)}</p>
+              <p className="mt-0.5 text-xs text-neutral-600">{infoAlert.tripId}</p>
+              <p className="mt-1 text-xs text-neutral-500">{infoAlert.alertMessage}</p>
+            </div>
+          </InfoWindowF>
+        ) : null}
       </GoogleMap>
     </div>
   );

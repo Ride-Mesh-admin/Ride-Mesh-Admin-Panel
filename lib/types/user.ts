@@ -9,4 +9,5 @@ export interface User {
   status: UserStatus;
   joinDate: string;
   avatarColor: "orange" | "purple" | "teal" | "green" | "blue";
+  photoURL?: string;
 }

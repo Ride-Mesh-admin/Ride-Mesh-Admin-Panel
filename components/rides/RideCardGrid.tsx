@@ -1,38 +1,23 @@
 "use client";
 
-import { Check, Ban } from "lucide-react";
+import { Ban } from "lucide-react";
 import type { RideListItem } from "@/lib/types/ride";
-import type { RideStatus } from "@/lib/types/ride";
-import { RIDE_STATUS_CONFIG, AVATAR_COLORS } from "@/lib/constants";
+import { AVATAR_COLORS } from "@/lib/constants";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 interface RideCardGridProps {
   rides: RideListItem[];
   selectedId: string | null;
   onSelectRide: (id: string) => void;
-  onModerate: (rideId: string, action: "approve" | "cancel") => void | Promise<void>;
+  onBlacklist: (rideId: string) => void | Promise<void>;
   moderatingId?: string | null;
-}
-
-function getInitials(name: string): string {
-  const parts = name.split(" ");
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return name.slice(0, 2).toUpperCase();
-}
-
-function StatusBadge({ status }: { status: RideStatus }) {
-  const config = RIDE_STATUS_CONFIG[status];
-  return (
-    <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${config.color}`}>
-      {config.label}
-    </span>
-  );
 }
 
 export function RideCardGrid({
   rides,
   selectedId,
   onSelectRide,
-  onModerate,
+  onBlacklist,
   moderatingId,
 }: RideCardGridProps) {
   return (
@@ -40,6 +25,8 @@ export function RideCardGrid({
       {rides.map((ride) => {
         const isSelected = selectedId === ride.id;
         const busy = moderatingId === ride.id;
+        const blacklisted = ride.isBlacklisted || ride.status === "blacklisted";
+        const { sosCount, helpCount, total } = ride.safetySignals;
         return (
           <div
             key={ride.id}
@@ -51,54 +38,59 @@ export function RideCardGrid({
               isSelected ? "border-brand bg-brand/10" : "border-border bg-surface hover:border-border/80"
             }`}
           >
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-medium text-text-primary">{ride.title}</p>
-                <p className="text-xs text-text-secondary">
-                  ID: {ride.rideId} · Posted {ride.postedAgo}
-                </p>
-              </div>
-              <StatusBadge status={ride.status} />
+            <div className="mb-3 min-w-0">
+              <p className="font-medium text-text-primary">{ride.title}</p>
+              <p className="text-xs text-text-secondary">
+                ID: {ride.rideId} · Posted {ride.postedAgo}
+              </p>
             </div>
             <div className="mb-3 flex items-center gap-3">
-              <div
-                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${(AVATAR_COLORS[ride.hostAvatarColor] ?? "bg-surface") === "bg-surface" ? "text-text-primary" : "text-brand-contrast"} ${AVATAR_COLORS[ride.hostAvatarColor] ?? "bg-surface"}`}
-              >
-                {getInitials(ride.hostName)}
-              </div>
+              <UserAvatar
+                name={ride.hostName}
+                photoURL={ride.hostPhotoURL}
+                className="h-10 w-10 rounded-full"
+                textClassName={`text-xs font-semibold ${(AVATAR_COLORS[ride.hostAvatarColor] ?? "bg-surface") === "bg-surface" ? "text-text-primary" : "text-brand-contrast"}`}
+                fallbackClassName={AVATAR_COLORS[ride.hostAvatarColor] ?? "bg-surface"}
+              />
               <div className="min-w-0">
                 <p className="text-sm font-medium text-text-primary">{ride.hostName}</p>
                 <p className="text-xs text-text-secondary">{ride.hostRating} ★</p>
               </div>
             </div>
-            <div className="mb-4 flex items-center justify-between">
-              {ride.reportCount > 0 ? (
-                <span className="inline-flex rounded-full bg-danger/20 px-2.5 py-0.5 text-xs font-medium text-danger">
-                  {ride.reportCount} Reports
-                </span>
+            <div className="mb-4 flex flex-wrap items-center gap-1.5">
+              {total === 0 ? (
+                <span className="text-xs text-text-secondary">No safety signals</span>
               ) : (
-                <span className="text-xs text-text-secondary">0 reports</span>
+                <>
+                  {sosCount > 0 ? (
+                    <span className="inline-flex rounded-full bg-danger/20 px-2.5 py-0.5 text-xs font-medium text-danger">
+                      {sosCount} SOS
+                    </span>
+                  ) : null}
+                  {helpCount > 0 ? (
+                    <span className="inline-flex rounded-full bg-warning/20 px-2.5 py-0.5 text-xs font-medium text-warning">
+                      {helpCount} Help
+                    </span>
+                  ) : null}
+                </>
               )}
             </div>
-            <div className="flex flex-col gap-2 border-t border-border/80 pt-3" onClick={(e) => e.stopPropagation()}>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void onModerate(ride.id, "approve")}
-                className="focus-ring flex items-center justify-center gap-2 rounded-lg bg-brand py-2 text-sm font-medium text-brand-contrast hover:bg-brand-dark disabled:opacity-50"
-              >
-                <Check className="h-4 w-4" />
-                Approve ride
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void onModerate(ride.id, "cancel")}
-                className="focus-ring flex items-center justify-center gap-2 rounded-lg border border-danger/50 py-2 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
-              >
-                <Ban className="h-4 w-4" />
-                Cancel ride
-              </button>
+            <div className="border-t border-border/80 pt-3" onClick={(e) => e.stopPropagation()}>
+              {blacklisted ? (
+                <span className="inline-flex w-full items-center justify-center rounded-lg border border-danger/40 bg-danger/15 py-2 text-sm font-medium text-danger">
+                  Blacklisted
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void onBlacklist(ride.id)}
+                  className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg border border-danger/50 py-2 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+                >
+                  <Ban className="h-4 w-4" />
+                  Blacklist ride
+                </button>
+              )}
             </div>
           </div>
         );

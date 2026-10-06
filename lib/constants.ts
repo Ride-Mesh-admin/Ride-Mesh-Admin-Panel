@@ -5,6 +5,7 @@ export const NAV_ITEMS = [
   { href: "/safety-alerts", label: "Safety", icon: "AlertTriangle" },
   { href: "/newsletter", label: "Newsletter", icon: "Mail" },
   { href: "/system-logs", label: "System Logs", icon: "FileText" },
+  { href: "/account", label: "Account", icon: "Shield" },
 ] as const;
 
 export const USERS_PER_PAGE = 5;
@@ -40,7 +41,7 @@ export const AVATAR_COLORS: Record<string, string> = {
 };
 
 export const RIDE_STATUS_CONFIG: Record<
-  "under_review" | "active" | "reported" | "flagged_ai" | "approved" | "cancelled",
+  "under_review" | "active" | "reported" | "flagged_ai" | "approved" | "cancelled" | "blacklisted",
   { label: string; color: string }
 > = {
   under_review: { label: "UNDER REVIEW", color: "bg-warning/20 text-warning border-warning/30" },
@@ -49,6 +50,7 @@ export const RIDE_STATUS_CONFIG: Record<
   flagged_ai: { label: "FLAGGED (AI)", color: "bg-text-secondary/30 text-text-secondary border-border" },
   approved: { label: "APPROVED", color: "bg-success/30 text-success border-success/40" },
   cancelled: { label: "CANCELLED", color: "bg-danger/20 text-danger border-danger/30" },
+  blacklisted: { label: "BLACKLISTED", color: "bg-danger/25 text-danger border-danger/40" },
 };
 
 export const SAFETY_ALERT_TYPE_CONFIG: Record<

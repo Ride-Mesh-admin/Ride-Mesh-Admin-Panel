@@ -111,7 +111,7 @@
 .feature-card-glow {
   box-shadow:
     0 1px 0 rgba(26, 26, 26, 0.03),
-    0 8px 28px rgba(255, 121, 24, 0.08);
+    0 6px 18px rgba(255, 121, 24, 0.035);
   transition:
     box-shadow 0.3s ease,
     border-color 0.3s ease,
@@ -121,8 +121,8 @@
 .feature-card-glow:hover {
   box-shadow:
     0 1px 0 rgba(26, 26, 26, 0.03),
-    0 12px 36px rgba(255, 121, 24, 0.22),
-    0 0 0 1px rgba(255, 121, 24, 0.12);
+    0 10px 24px rgba(255, 121, 24, 0.08),
+    0 0 0 1px rgba(255, 121, 24, 0.05);
 }
 
 html[data-theme="dark"] .feature-card-glow {
@@ -138,14 +138,26 @@ html[data-theme="dark"] .feature-card-glow:hover {
     0 0 0 1px rgba(255, 121, 24, 0.2);
 }
 
-/* Softer shadow for solid orange fills (buttons, banners, active nav) */
+/* Softer shadow for solid orange fills (buttons, banners, active nav) — light mode kept subtle */
 .brand-surface-glow {
+  box-shadow:
+    0 2px 8px rgba(255, 121, 24, 0.08),
+    0 0 0 1px rgba(255, 121, 24, 0.05);
+}
+
+.brand-surface-glow:hover {
+  box-shadow:
+    0 3px 10px rgba(255, 121, 24, 0.12),
+    0 0 0 1px rgba(255, 121, 24, 0.08);
+}
+
+html[data-theme="dark"] .brand-surface-glow {
   box-shadow:
     0 4px 12px rgba(255, 121, 24, 0.16),
     0 0 0 1px rgba(255, 121, 24, 0.1);
 }
 
-.brand-surface-glow:hover {
+html[data-theme="dark"] .brand-surface-glow:hover {
   box-shadow:
     0 6px 16px rgba(255, 121, 24, 0.22),
     0 0 0 1px rgba(255, 121, 24, 0.14);
@@ -154,12 +166,26 @@ html[data-theme="dark"] .feature-card-glow:hover {
 /* Stronger halo for non-fill accents (legacy; prefer brand-surface-glow on bg-brand) */
 .brand-glow {
   box-shadow:
+    0 0 8px rgba(255, 121, 24, 0.12),
+    0 0 16px rgba(255, 121, 24, 0.05),
+    inset 0 0 0 1px rgba(255, 121, 24, 0.08);
+}
+
+.brand-glow:hover {
+  box-shadow:
+    0 0 10px rgba(255, 121, 24, 0.16),
+    0 0 18px rgba(255, 121, 24, 0.07),
+    inset 0 0 0 1px rgba(255, 121, 24, 0.1);
+}
+
+html[data-theme="dark"] .brand-glow {
+  box-shadow:
     0 0 12px rgba(255, 121, 24, 0.28),
     0 0 24px rgba(255, 121, 24, 0.12),
     inset 0 0 0 1px rgba(255, 121, 24, 0.15);
 }
 
-.brand-glow:hover {
+html[data-theme="dark"] .brand-glow:hover {
   box-shadow:
     0 0 16px rgba(255, 121, 24, 0.34),
     0 0 28px rgba(255, 121, 24, 0.16),
@@ -202,10 +228,22 @@ html[data-theme="dark"] .liquid-glass {
 .icon-tile:hover,
 .group:hover .icon-tile {
   @apply bg-brand text-brand-contrast;
+  box-shadow: 0 0 12px rgba(255, 121, 24, 0.14);
+}
+
+html[data-theme="dark"] .icon-tile:hover,
+html[data-theme="dark"] .group:hover .icon-tile {
   box-shadow: 0 0 20px rgba(255, 121, 24, 0.35);
 }
 
 .page-mesh-bg {
+  background:
+    radial-gradient(ellipse 80% 50% at 0% 0%, rgba(255, 121, 24, 0.05), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(255, 121, 24, 0.025), transparent 50%),
+    var(--background);
+}
+
+html[data-theme="dark"] .page-mesh-bg {
   background:
     radial-gradient(ellipse 80% 50% at 0% 0%, rgba(255, 121, 24, 0.12), transparent 55%),
     radial-gradient(ellipse 60% 40% at 100% 0%, rgba(255, 121, 24, 0.06), transparent 50%),

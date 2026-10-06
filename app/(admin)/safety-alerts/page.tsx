@@ -42,6 +42,7 @@ export default function SafetyAlertsPage() {
   const [utcTime, setUtcTime] = useState(formatUTC());
   const [notifyingId, setNotifyingId] = useState<string | null>(null);
   const [notifyErrorByAlertId, setNotifyErrorByAlertId] = useState<Record<string, string>>({});
+  const [notifySuccessByAlertId, setNotifySuccessByAlertId] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let isMounted = true;
@@ -97,6 +98,11 @@ export default function SafetyAlertsPage() {
 
   const handleNotifyHost = useCallback(async (alert: SafetyAlert) => {
     setNotifyingId(alert.id);
+    setNotifySuccessByAlertId((prev) => {
+      const next = { ...prev };
+      delete next[alert.id];
+      return next;
+    });
     setNotifyErrorByAlertId((prev) => {
       const next = { ...prev };
       delete next[alert.id];
@@ -117,11 +123,7 @@ export default function SafetyAlertsPage() {
         }));
         return;
       }
-      setNotifyErrorByAlertId((prev) => {
-        const next = { ...prev };
-        delete next[alert.id];
-        return next;
-      });
+      setNotifySuccessByAlertId((prev) => ({ ...prev, [alert.id]: true }));
     } catch {
       setNotifyErrorByAlertId((prev) => ({
         ...prev,
@@ -180,6 +182,7 @@ export default function SafetyAlertsPage() {
                     onNotifyHost={handleNotifyHost}
                     notifyingId={notifyingId}
                     notifyErrorMessage={notifyErrorByAlertId[alert.id] ?? null}
+                    notifySuccess={Boolean(notifySuccessByAlertId[alert.id])}
                   />
                 ))
               )}

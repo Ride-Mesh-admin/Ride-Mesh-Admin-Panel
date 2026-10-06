@@ -1,8 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-type DevCredentials = { email: string; password: string };
+import { PasswordInput } from "@/components/ui/PasswordInput";
+
+type DevCredentials = { email: string; password: string; note?: string };
 
 export function LoginForm({ devCredentials }: { devCredentials?: DevCredentials | null }) {
   const router = useRouter();
@@ -71,12 +74,16 @@ export function LoginForm({ devCredentials }: { devCredentials?: DevCredentials 
               />
             </div>
             <div>
-              <label htmlFor="admin-login-password" className="mb-1.5 block text-xs font-medium text-text-secondary">
-                Password
-              </label>
-              <input
+              <div className="mb-1.5 flex items-center justify-between gap-3">
+                <label htmlFor="admin-login-password" className="block text-xs font-medium text-text-secondary">
+                  Password
+                </label>
+                <Link href="/forgot-password" className="text-xs font-medium text-brand hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
+              <PasswordInput
                 id="admin-login-password"
-                type="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -105,10 +112,10 @@ export function LoginForm({ devCredentials }: { devCredentials?: DevCredentials 
             className="feature-card-glow rounded-2xl border border-dashed border-brand/40 bg-brand-soft p-5"
             data-testid="dev-login-hint"
           >
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand">
-              Development only
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand">Development only</p>
+            <p className="mt-1 text-sm text-text-secondary">
+              {devCredentials.note || "Use these credentials to sign in locally."}
             </p>
-            <p className="mt-1 text-sm text-text-secondary">Use these credentials to sign in locally.</p>
             <dl className="mt-4 space-y-3 rounded-xl border border-border/60 bg-surface px-3 py-3 font-mono text-sm">
               <div>
                 <dt className="text-xs text-text-secondary">Email</dt>

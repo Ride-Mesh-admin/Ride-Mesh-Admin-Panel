@@ -1,25 +1,26 @@
 "use client";
 
-import { X, Check, Ban } from "lucide-react";
+import { X, Ban } from "lucide-react";
 import type { RideDetail } from "@/lib/types/ride";
 
 interface RideDetailPanelProps {
   ride: RideDetail | null;
   onClose: () => void;
-  onModerate: (rideId: string, action: "approve" | "cancel") => void | Promise<void>;
+  onBlacklist: (rideId: string) => void | Promise<void>;
   isModerating?: boolean;
 }
 
-export function RideDetailPanel({ ride, onClose, onModerate, isModerating }: RideDetailPanelProps) {
+export function RideDetailPanel({ ride, onClose, onBlacklist, isModerating }: RideDetailPanelProps) {
   if (!ride) return null;
 
-  const reportCount = ride.reportCount;
   const disabled = Boolean(isModerating);
+  const blacklisted = ride.isBlacklisted === true;
+  const { sosCount, helpCount, total } = ride.safetySignals;
 
   return (
     <div className="flex h-full flex-col border-l border-border bg-surface">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="font-bold text-text-primary">RIDE DETAILS</h2>
+        <h2 className="font-bold text-text-primary">Ride details</h2>
         <button
           type="button"
           onClick={onClose}
@@ -34,7 +35,7 @@ export function RideDetailPanel({ ride, onClose, onModerate, isModerating }: Rid
           <div className="mb-3 flex items-start justify-between gap-2">
             {ride.riskLevel === "high" && (
               <span className="inline-flex rounded-full bg-danger/20 px-2.5 py-0.5 text-xs font-medium text-danger">
-                HIGH RISK
+                High risk
               </span>
             )}
             <span className="text-xs text-text-secondary">{ride.rideId}</span>
@@ -54,7 +55,27 @@ export function RideDetailPanel({ ride, onClose, onModerate, isModerating }: Rid
         </div>
 
         <div className="mt-6">
-          <h4 className="mb-3 font-bold text-text-primary">REPORT LOGS ({reportCount})</h4>
+          <h4 className="mb-3 font-bold text-text-primary">Safety signals ({total})</h4>
+          {total > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {sosCount > 0 ? (
+                <span className="inline-flex rounded-full bg-danger/20 px-2.5 py-1 text-xs font-medium text-danger">
+                  {sosCount} SOS
+                </span>
+              ) : null}
+              {helpCount > 0 ? (
+                <span className="inline-flex rounded-full bg-warning/20 px-2.5 py-1 text-xs font-medium text-warning">
+                  {helpCount} Help
+                </span>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-text-secondary">No SOS or help signals for this ride.</p>
+          )}
+        </div>
+
+        <div className="mt-6">
+          <h4 className="mb-3 font-bold text-text-primary">Report logs ({ride.reportCount})</h4>
           {ride.reportLogs.length > 0 ? (
             <ul className="space-y-3">
               {ride.reportLogs.map((log) => (
@@ -73,7 +94,7 @@ export function RideDetailPanel({ ride, onClose, onModerate, isModerating }: Rid
         </div>
 
         <div className="mt-6">
-          <h4 className="mb-3 font-bold text-text-primary">HOST REPUTATION</h4>
+          <h4 className="mb-3 font-bold text-text-primary">Host reputation</h4>
           <div className="rounded-lg border border-border bg-background p-4">
             <dl className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -85,32 +106,29 @@ export function RideDetailPanel({ ride, onClose, onModerate, isModerating }: Rid
                 <dd className="font-medium text-text-primary">{ride.hostReputation.ridesHosted}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-text-secondary">Past Warnings</dt>
+                <dt className="text-text-secondary">Past warnings</dt>
                 <dd className="font-medium text-text-primary">{ride.hostReputation.pastWarnings}</dd>
               </div>
             </dl>
           </div>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3">
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void onModerate(ride.id, "approve")}
-            className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg bg-brand py-3 text-sm font-medium text-brand-contrast hover:bg-brand-dark disabled:opacity-50"
-          >
-            <Check className="h-4 w-4" />
-            Approve ride
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void onModerate(ride.id, "cancel")}
-            className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg border border-danger/50 py-3 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
-          >
-            <Ban className="h-4 w-4" />
-            Cancel ride
-          </button>
+        <div className="mt-6">
+          {blacklisted ? (
+            <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-3 text-center text-sm font-medium text-danger">
+              This ride is blacklisted.
+            </p>
+          ) : (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => void onBlacklist(ride.id)}
+              className="focus-ring flex w-full items-center justify-center gap-2 rounded-lg border border-danger/50 py-3 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            >
+              <Ban className="h-4 w-4" />
+              Blacklist ride
+            </button>
+          )}
         </div>
       </div>
     </div>

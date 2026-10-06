@@ -6,7 +6,7 @@ import type { User, UserStatus } from "@/lib/types/user";
 import type { RideDetail, RideListItem, RideStatus } from "@/lib/types/ride";
 import type { SafetyAlert } from "@/lib/types/safety";
 import type { DashboardMetrics } from "@/lib/types/metric";
-import type { RideReport, Severity, ReportStatus } from "@/lib/types/report";
+import type { RideReport } from "@/lib/types/report";
 import type { CriticalAlert } from "@/lib/types/alert";
 import type { LogEntry, SystemActivityLog, SystemStatusBar } from "@/lib/types/log";
 import type { NewsletterCampaign, NewsletterSubscriber } from "@/lib/types/newsletter";
@@ -78,6 +78,17 @@ function colorFromId(id: string): User["avatarColor"] {
   return AVATAR_COLORS[total % AVATAR_COLORS.length];
 }
 
+function photoFromProfile(data: Record<string, unknown> | undefined): string | undefined {
+  if (!data) return undefined;
+  const raw =
+    data.photoURL ?? data.photoUrl ?? data.avatarUrl ?? data.profileImage ?? data.profilePhoto;
+  const url = typeof raw === "string" ? raw.trim() : "";
+  return url || undefined;
+}
+
+/** Fixed sender identity for admin → host chat threads (must exist in `users`). */
+export const ADMIN_CHAT_SENDER_ID = process.env.ADMIN_CHAT_SENDER_ID || "ridemesh_admin";
+
 function initialsFromName(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
@@ -93,20 +104,20 @@ function parseResponseTimeMs(value: unknown): number {
   return 0;
 }
 
-function mapRideStatus(raw: string | undefined, reportCount: number): RideStatus {
+function mapRideStatus(
+  raw: string | undefined,
+  reportCount: number,
+  isBlacklisted?: boolean,
+): RideStatus {
+  if (isBlacklisted) return "blacklisted";
   const s = String(raw || "").toLowerCase();
+  if (s === "blacklisted") return "blacklisted";
   if (s === "cancelled" || s === "canceled") return "cancelled";
   if (s === "approved") return "approved";
   if (reportCount >= 4) return "flagged_ai";
   if (reportCount > 0) return "reported";
   if (s === "ongoing" || s === "active") return "active";
   return "under_review";
-}
-
-function reportStatusFromSeverity(severity: Severity): ReportStatus {
-  if (severity === "high") return "pending";
-  if (severity === "medium") return "in_review";
-  return "resolved";
 }
 
 export async function fetchUsersData(): Promise<{ users: User[]; total: number; source: DataSource }> {
@@ -126,6 +137,7 @@ export async function fetchUsersData(): Promise<{ users: User[]; total: number; 
         status: suspended ? "suspended" : "active",
         joinDate: formatShortDate(data.createdAt),
         avatarColor: colorFromId(doc.id),
+        photoURL: photoFromProfile(data as Record<string, unknown>),
       };
     });
     return { users, total: users.length, source: "live" };
@@ -179,10 +191,12 @@ export async function fetchRidesData(): Promise<{
 }> {
   try {
     const db = getAdminDb();
-    const [ridesSnap, seatReqSnap, usersSnap] = await Promise.all([
+    const [ridesSnap, seatReqSnap, usersSnap, sosSnap, helpSnap] = await Promise.all([
       db.collection("rides").orderBy("createdAt", "desc").limit(500).get(),
       db.collection("seatRequests").orderBy("createdAt", "desc").limit(1000).get(),
       db.collection("users").get(),
+      db.collection("sosAlerts").limit(500).get().catch(() => null),
+      db.collection("helpSignals").limit(500).get().catch(() => null),
     ]);
 
     const hostLookup = new Map(usersSnap.docs.map((doc) => [doc.id, doc.data()]));
@@ -191,6 +205,22 @@ export async function fetchRidesData(): Promise<{
       const hostId = String(doc.data().hostId || "");
       if (!hostId) return;
       hostedCounts.set(hostId, (hostedCounts.get(hostId) || 0) + 1);
+    });
+
+    const safetyByRide = new Map<string, { sosCount: number; helpCount: number }>();
+    sosSnap?.docs.forEach((doc) => {
+      const rideId = String(doc.data().rideId || "");
+      if (!rideId) return;
+      const cur = safetyByRide.get(rideId) || { sosCount: 0, helpCount: 0 };
+      cur.sosCount += 1;
+      safetyByRide.set(rideId, cur);
+    });
+    helpSnap?.docs.forEach((doc) => {
+      const rideId = String(doc.data().rideId || "");
+      if (!rideId) return;
+      const cur = safetyByRide.get(rideId) || { sosCount: 0, helpCount: 0 };
+      cur.helpCount += 1;
+      safetyByRide.set(rideId, cur);
     });
 
     const reportLogsByRide = new Map<string, Array<{ id: string; title: string; timestamp: string; description: string }>>();
@@ -227,8 +257,15 @@ export async function fetchRidesData(): Promise<{
       const hostName = String(data.hostUsername || hostProfile.username || hostProfile.fullName || "Unknown Host");
       const logs = (reportLogsByRide.get(doc.id) || []).slice(0, 8);
       const reportCount = logs.length;
-      const status = mapRideStatus(String(data.status || "upcoming"), reportCount);
+      const isBlacklisted = data.isBlacklisted === true || String(data.status || "").toLowerCase() === "blacklisted";
+      const status = mapRideStatus(String(data.status || "upcoming"), reportCount, isBlacklisted);
       const hostRating = Number(((hostedCounts.get(hostId) || 1) > 3 ? 4.7 : 4.1).toFixed(1));
+      const safety = safetyByRide.get(doc.id) || { sosCount: 0, helpCount: 0 };
+      const safetySignals = {
+        sosCount: safety.sosCount,
+        helpCount: safety.helpCount,
+        total: safety.sosCount + safety.helpCount,
+      };
 
       rides.push({
         id: doc.id,
@@ -238,21 +275,26 @@ export async function fetchRidesData(): Promise<{
         postedAgo: formatRelativeTime(data.createdAt || data.updatedAt),
         hostName,
         hostAvatarColor: colorFromId(hostId || doc.id),
+        hostPhotoURL: photoFromProfile(hostProfile as Record<string, unknown>),
         hostRating,
         reportCount,
+        safetySignals,
         status,
+        isBlacklisted,
       });
 
       detailsById[doc.id] = {
         id: doc.id,
         rideId: `RM-${doc.id.slice(0, 6).toUpperCase()}`,
-        riskLevel: reportCount >= 4 ? "high" : reportCount >= 2 ? "medium" : "low",
+        riskLevel: safetySignals.total >= 2 || reportCount >= 4 ? "high" : reportCount >= 2 ? "medium" : "low",
         title: String(data.title || "Untitled Ride"),
         description: String(data.description || "No additional description provided."),
         pickup: String(data.startLocationLabel || "Unknown pickup"),
         dropoff: String(data.endLocationLabel || "Unknown dropoff"),
         reportCount,
+        safetySignals,
         reportLogs: logs,
+        isBlacklisted,
         hostReputation: {
           memberSince: formatShortDate(hostProfile.createdAt || Date.now()),
           ridesHosted: hostedCounts.get(hostId) || 0,
@@ -263,7 +305,7 @@ export async function fetchRidesData(): Promise<{
 
     const stats = {
       activeRides: rides.filter((ride) => ride.status === "active").length,
-      reported: rides.filter((ride) => ride.reportCount > 0).length,
+      reported: rides.filter((ride) => ride.safetySignals.total > 0 || ride.reportCount > 0).length,
       moderatorsOnline: Math.max(1, Math.min(12, Math.floor(rides.length / 20) + 2)),
     };
 
@@ -306,17 +348,21 @@ export async function fetchSafetyData(): Promise<{
         const userName = String(user.username || user.fullName || "Unknown User");
         const alertId = `sos-${doc.id}`;
         const createdAtMs = toMillis(data.createdAt);
+        const rideId = String(data.rideId || "");
         alerts.push({
           id: alertId,
           type: "sos_critical",
           activeDuration: formatRelativeTime(data.createdAt).replace(" ago", ""),
           userName,
-          tripId: `RMM-${String(data.rideId || doc.id).slice(0, 6).toUpperCase()}`,
+          tripId: `RMM-${(rideId || doc.id).slice(0, 6).toUpperCase()}`,
           vehicle: String(ride.vehicleType || "Unknown Vehicle"),
           alertMessage: "HIGH IMPACT DETECTED",
           alertIcon: "impact",
           hasLiveIndicator: true,
           avatarColor: colorFromId(String(data.userId || doc.id)),
+          photoURL: photoFromProfile(user as Record<string, unknown>),
+          rideId: rideId || undefined,
+          hostId: String(ride.hostId || "") || undefined,
           createdAtMs,
           ...alertCoordsFromDoc(raw),
         });
@@ -332,16 +378,20 @@ export async function fetchSafetyData(): Promise<{
         const userName = String(user.username || user.fullName || "Unknown User");
         const alertId = `help-${doc.id}`;
         const createdAtMs = toMillis(data.createdAt);
+        const rideId = String(data.rideId || "");
         alerts.push({
           id: alertId,
           type: "help_signal",
           activeDuration: formatRelativeTime(data.createdAt).replace(" ago", ""),
           userName,
-          tripId: `RMM-${String(data.rideId || doc.id).slice(0, 6).toUpperCase()}`,
+          tripId: `RMM-${(rideId || doc.id).slice(0, 6).toUpperCase()}`,
           vehicle: String(ride.vehicleType || "Unknown Vehicle"),
           alertMessage: String(data.message || "OFF-ROUTE WARNING").toUpperCase(),
           alertIcon: "warning",
           avatarColor: colorFromId(String(data.userId || doc.id)),
+          photoURL: photoFromProfile(user as Record<string, unknown>),
+          rideId: rideId || undefined,
+          hostId: String(ride.hostId || "") || undefined,
           createdAtMs,
           ...alertCoordsFromDoc(raw),
         });
@@ -360,10 +410,10 @@ export async function fetchSafetyData(): Promise<{
   }
 }
 
-/** Shown in the host app when admin uses “Notify host” from Safety Alerts. */
-export const ADMIN_HOST_EMERGENCY_TITLE = "Emergency message from RideMesh Admin";
+/** Shown in the host app chat when admin uses “Notify host” from Safety Alerts. */
+export const ADMIN_HOST_EMERGENCY_TITLE = "RideMesh Admin";
 export const ADMIN_HOST_EMERGENCY_BODY =
-  "A RideMesh administrator is contacting you about an active safety alert on your ride. Open the app and review your ride immediately. Follow any on-screen instructions.";
+  "A RideMesh administrator is contacting you about an active safety alert on your ride. Open this chat and review your ride immediately. Follow any on-screen instructions.";
 
 function parseSafetyAlertId(alertId: string): { kind: "sos" | "help"; docId: string } | null {
   if (alertId.startsWith("sos-")) return { kind: "sos", docId: alertId.slice(4) };
@@ -371,9 +421,32 @@ function parseSafetyAlertId(alertId: string): { kind: "sos" | "help"; docId: str
   return null;
 }
 
+async function ensureAdminChatSenderProfile(): Promise<void> {
+  const db = getAdminDb();
+  const ref = db.collection("users").doc(ADMIN_CHAT_SENDER_ID);
+  const snap = await ref.get();
+  const base = {
+    username: "RideMesh Admin",
+    fullName: "RideMesh Admin",
+    role: "admin",
+    isSystemAdmin: true,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  if (!snap.exists) {
+    await ref.set({
+      ...base,
+      email: process.env.ADMIN_EMAIL || "admin@ride-mesh.app",
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return;
+  }
+  await ref.set(base, { merge: true });
+}
+
 /**
- * Writes `adminHostNotifications` for the ride host. The consumer app should listen for
- * documents where `hostId` matches the signed-in user and `severity` === `emergency`.
+ * Sends a personal chat message to the ride host (appears in their Chat list/thread)
+ * via `chatThreads` + `messages`, matching the mobile app schema in chatService.js.
+ * Also writes a `notifications` doc (type `new_chat`) so push delivery runs.
  */
 export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: boolean; error?: string }> {
   const parsed = parseSafetyAlertId(alertId);
@@ -400,22 +473,120 @@ export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: b
     if (!rideSnap.exists) {
       return { ok: false, error: "Ride not found." };
     }
-    const hostId = String((rideSnap.data() as Record<string, unknown>)?.hostId || "");
+    const rideData = rideSnap.data() as Record<string, unknown>;
+    const hostId = String(rideData.hostId || "");
     if (!hostId) {
       return { ok: false, error: "No host is assigned to this ride." };
     }
+
+    await ensureAdminChatSenderProfile();
+
+    const senderId = ADMIN_CHAT_SENDER_ID;
+    const participantIds = [senderId, hostId].sort();
+    const rideTitle = String(rideData.title || "Safety alert");
+    const messageText =
+      parsed.kind === "sos"
+        ? `${ADMIN_HOST_EMERGENCY_BODY}\n\nAlert type: SOS critical on ride “${rideTitle}”.`
+        : `${ADMIN_HOST_EMERGENCY_BODY}\n\nAlert type: Help signal on ride “${rideTitle}”.`;
+
+    // Prefer an existing admin↔host thread for this ride; otherwise create one.
+    const existing = await db
+      .collection("chatThreads")
+      .where("rideId", "==", rideId)
+      .where("participantIds", "array-contains", hostId)
+      .limit(20)
+      .get();
+
+    let threadId: string | null = null;
+    for (const docSnap of existing.docs) {
+      const ids = ((docSnap.data().participantIds as string[]) || []).slice().sort();
+      if (ids.length === 2 && ids[0] === participantIds[0] && ids[1] === participantIds[1]) {
+        threadId = docSnap.id;
+        break;
+      }
+      // Also match threads already marked as admin support for this ride+host
+      if (docSnap.data().isAdminThread === true && ids.includes(hostId) && ids.includes(senderId)) {
+        threadId = docSnap.id;
+        break;
+      }
+    }
+
+    if (!threadId) {
+      const threadRef = db.collection("chatThreads").doc();
+      threadId = threadRef.id;
+      await threadRef.set({
+        rideId,
+        participantIds,
+        rideTitle,
+        isAdminThread: true,
+        lastMessage: null,
+        updatedAt: FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    const now = new Date();
+    const previewText = messageText.length > 180 ? `${messageText.slice(0, 180).trimEnd()}…` : messageText;
+
+    await db.collection("chatThreads").doc(threadId).collection("messages").add({
+      senderId,
+      text: messageText,
+      type: "text",
+      attachmentUrl: "",
+      attachmentName: "",
+      mimeType: "",
+      createdAt: now,
+      sentAt: now,
+      alertId,
+      source: "safety_alerts_console",
+    });
+
+    await db.collection("chatThreads").doc(threadId).set(
+      {
+        rideTitle,
+        isAdminThread: true,
+        participantIds,
+        lastMessage: {
+          text: previewText,
+          senderId,
+          type: "text",
+          createdAt: now,
+          sentAt: now,
+          deliveredAt: null,
+          readAt: null,
+        },
+        updatedAt: now,
+      },
+      { merge: true },
+    );
+
+    // Triggers Cloud Function push (type `new_chat` → directMessages pref).
+    await db.collection("notifications").add({
+      userId: hostId,
+      type: "new_chat",
+      title: ADMIN_HOST_EMERGENCY_TITLE,
+      message: previewText,
+      read: false,
+      rideId,
+      threadId,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    // Keep legacy collection for any older listeners.
     await db.collection("adminHostNotifications").add({
       hostId,
       rideId,
       alertId,
+      threadId,
       title: ADMIN_HOST_EMERGENCY_TITLE,
-      body: ADMIN_HOST_EMERGENCY_BODY,
+      body: messageText,
       severity: "emergency",
       createdAt: FieldValue.serverTimestamp(),
       source: "safety_alerts_console",
       read: false,
       dismissed: false,
     });
+
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Failed to notify host." };
@@ -470,22 +641,56 @@ export async function fetchDashboardData(): Promise<{
       sector: "LIVE",
     };
 
-    const reports: RideReport[] = notificationsSnap.docs.slice(0, 8).map((doc, index) => {
+    const usersSnapForReports = await db.collection("users").get().catch(() => null);
+    const userNameById = new Map(
+      (usersSnapForReports?.docs || []).map((doc) => {
+        const d = doc.data();
+        return [doc.id, String(d.username || d.fullName || "User")] as const;
+      }),
+    );
+    const ridesSnapForReports = await db.collection("rides").get().catch(() => null);
+    const rideHostMeta = new Map(
+      (ridesSnapForReports?.docs || []).map((doc) => {
+        const d = doc.data();
+        const hostId = String(d.hostId || "");
+        return [
+          doc.id,
+          {
+            hostId,
+            hostLabel: String(d.hostUsername || userNameById.get(hostId) || "Host"),
+          },
+        ] as const;
+      }),
+    );
+
+    const reportRows: RideReport[] = [];
+    sosSnap.docs.slice(0, 6).forEach((doc) => {
       const data = doc.data();
-      const severity: Severity =
-        String(data.type || "").includes("sos") || String(data.type || "").includes("error")
-          ? "high"
-          : index % 2 === 0
-            ? "medium"
-            : "low";
-      return {
-        id: `REP-${doc.id.slice(0, 6).toUpperCase()}`,
-        userName: String(data.userName || data.title || "RideMesh User"),
-        driverName: String(data.driverName || "Assigned Driver"),
-        severity,
-        status: reportStatusFromSeverity(severity),
-      };
+      const rideId = String(data.rideId || "");
+      const hostMeta = rideHostMeta.get(rideId);
+      reportRows.push({
+        id: `SOS-${doc.id.slice(0, 6).toUpperCase()}`,
+        userName: userNameById.get(String(data.userId || "")) || "Unknown rider",
+        driverName: hostMeta?.hostLabel || "Host",
+        severity: "high",
+        status: "pending",
+        href: "/safety-alerts",
+      });
     });
+    helpSnap.docs.slice(0, 6).forEach((doc) => {
+      const data = doc.data();
+      const rideId = String(data.rideId || "");
+      const hostMeta = rideHostMeta.get(rideId);
+      reportRows.push({
+        id: `HLP-${doc.id.slice(0, 6).toUpperCase()}`,
+        userName: userNameById.get(String(data.userId || "")) || "Unknown rider",
+        driverName: hostMeta?.hostLabel || "Host",
+        severity: "medium",
+        status: "in_review",
+        href: "/safety-alerts",
+      });
+    });
+    const reports: RideReport[] = reportRows.slice(0, 8);
 
     const liveLogs: LogEntry[] = logsSnap && logsSnap.docs.length > 0
       ? logsSnap.docs.slice(0, 5).map((doc) => {
@@ -694,13 +899,29 @@ export async function fetchAdminNotificationFeed(): Promise<AdminNotificationFee
 
 export async function moderateRide(
   rideId: string,
-  action: "approve" | "cancel",
+  action: "approve" | "cancel" | "blacklist",
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const db = getAdminDb();
+    if (action === "blacklist") {
+      await db.collection("rides").doc(rideId).update({
+        status: "blacklisted",
+        isBlacklisted: true,
+        adminModeratedAt: FieldValue.serverTimestamp(),
+        adminModerationAction: "blacklist",
+      });
+      await db.collection("systemLogs").add({
+        module: "RIDE_ADMIN",
+        severity: "warning",
+        message: `Ride ${rideId} blacklisted by admin.`,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      return { ok: true };
+    }
     const status = action === "approve" ? "approved" : "cancelled";
     await db.collection("rides").doc(rideId).update({
       status,
+      isBlacklisted: false,
       adminModeratedAt: FieldValue.serverTimestamp(),
       adminModerationAction: action,
     });

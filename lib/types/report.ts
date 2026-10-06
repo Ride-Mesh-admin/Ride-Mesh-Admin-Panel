@@ -7,4 +7,6 @@ export interface RideReport {
   driverName: string;
   severity: Severity;
   status: ReportStatus;
+  /** Deep-link target in the admin console (usually `/safety-alerts`). */
+  href?: string;
 }

@@ -13,9 +13,10 @@ import {
   SosIcon,
   SendIcon,
   MilesIcon,
+  ShieldIcon,
 } from "@/components/icons/AppIcons";
 
-const ICONS = [CalendarIcon, UsersIcon, VehicleIcon, SosIcon, SendIcon, MilesIcon] as const;
+const ICONS = [CalendarIcon, UsersIcon, VehicleIcon, SosIcon, SendIcon, MilesIcon, ShieldIcon] as const;
 
 export function Sidebar() {
   const pathname = usePathname();

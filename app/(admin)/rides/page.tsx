@@ -9,12 +9,12 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import type { RideStatus, RideListItem, RideDetail } from "@/lib/types/ride";
 
 const STATUS_OPTIONS: { value: "all" | RideStatus; label: string }[] = [
-  { value: "all", label: "All Statuses" },
-  { value: "under_review", label: "Under Review" },
+  { value: "all", label: "All statuses" },
+  { value: "under_review", label: "Under review" },
   { value: "active", label: "Active" },
   { value: "reported", label: "Reported" },
   { value: "flagged_ai", label: "Flagged (AI)" },
-  { value: "approved", label: "Approved" },
+  { value: "blacklisted", label: "Blacklisted" },
   { value: "cancelled", label: "Cancelled" },
 ];
 
@@ -101,18 +101,18 @@ export default function RidesPage() {
     };
   }, [loadRides]);
 
-  const handleModerate = useCallback(
-    async (rideId: string, action: "approve" | "cancel") => {
+  const handleBlacklist = useCallback(
+    async (rideId: string) => {
       setModeratingId(rideId);
       try {
         const res = await fetch(`/api/admin/rides/${rideId}/moderate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ action }),
+          body: JSON.stringify({ action: "blacklist" }),
         });
         if (!res.ok) {
-          console.warn("Ride moderation failed", await res.text());
+          console.warn("Ride blacklist failed", await res.text());
         }
       } catch (e) {
         console.warn(e);
@@ -158,7 +158,7 @@ export default function RidesPage() {
             <p className="text-2xl font-bold text-text-primary">{rideStats.activeRides.toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-xs text-text-secondary">REPORTED</p>
+            <p className="text-xs text-text-secondary">WITH SAFETY SIGNALS</p>
             <p className="text-2xl font-bold text-text-primary">{rideStats.reported}</p>
           </div>
           <div>
@@ -243,7 +243,7 @@ export default function RidesPage() {
               rides={filteredRides}
               selectedId={selectedRideId}
               onSelectRide={setSelectedRideId}
-              onModerate={handleModerate}
+              onBlacklist={handleBlacklist}
               moderatingId={moderatingId}
             />
           ) : (
@@ -251,7 +251,7 @@ export default function RidesPage() {
               rides={filteredRides}
               selectedId={selectedRideId}
               onSelectRide={setSelectedRideId}
-              onModerate={handleModerate}
+              onBlacklist={handleBlacklist}
               moderatingId={moderatingId}
             />
           )}
@@ -261,7 +261,7 @@ export default function RidesPage() {
             <RideDetailPanel
               ride={selectedDetail}
               onClose={() => setSelectedRideId(null)}
-              onModerate={handleModerate}
+              onBlacklist={handleBlacklist}
               isModerating={moderatingId === selectedRideId}
             />
           </div>

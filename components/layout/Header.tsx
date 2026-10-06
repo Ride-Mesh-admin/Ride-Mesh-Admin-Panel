@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Bell, Settings, User, CheckCircle2, Moon, Sun, LogOut } from "lucide-react";
+import { Search, Bell, Settings, User, Moon, Sun, LogOut } from "lucide-react";
 import { useAdminPanel } from "@/components/layout/AdminPanelProvider";
 import { adminLogoutAndRedirect } from "@/lib/client/adminLogout";
 
@@ -14,18 +14,11 @@ export function Header() {
     settings,
     updateSettings,
     profile,
-    updateProfile,
     markAllNotificationsAsRead,
     markNotificationAsRead,
   } = useAdminPanel();
   const [openPanel, setOpenPanel] = useState<PanelName>(null);
-  const [profileDraft, setProfileDraft] = useState({ name: profile.name, email: profile.email });
-  const [saved, setSaved] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    setProfileDraft({ name: profile.name, email: profile.email });
-  }, [profile.email, profile.name]);
 
   useEffect(() => {
     if (!openPanel) return;
@@ -49,20 +42,6 @@ export function Header() {
     if (unreadNotifications === 0) return "Notifications";
     return `Notifications (${unreadNotifications} unread)`;
   }, [unreadNotifications]);
-
-  function saveProfile() {
-    const trimmedName = profileDraft.name.trim();
-    const trimmedEmail = profileDraft.email.trim();
-    if (!trimmedName || !trimmedEmail) return;
-    const initials = trimmedName
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((part) => part.charAt(0).toUpperCase())
-      .join("");
-    updateProfile({ name: trimmedName, email: trimmedEmail, initials: initials || "AD", lastLogin: "Just now" });
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
-  }
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border/80 bg-background/85 px-6 backdrop-blur-xl">
@@ -196,37 +175,18 @@ export function Header() {
             <h3 className="mb-3 text-sm font-semibold text-text-primary">Admin Profile</h3>
             <div className="space-y-3">
               <div>
-                <label htmlFor="admin-name" className="mb-1 block text-xs text-text-secondary">
-                  Name
-                </label>
-                <input
-                  id="admin-name"
-                  value={profileDraft.name}
-                  onChange={(event) => setProfileDraft((prev) => ({ ...prev, name: event.target.value }))}
-                  className="focus-ring w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary"
-                />
+                <p className="mb-1 text-xs text-text-secondary">Name</p>
+                <p className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary">
+                  {profile.name}
+                </p>
               </div>
               <div>
-                <label htmlFor="admin-email" className="mb-1 block text-xs text-text-secondary">
-                  Email
-                </label>
-                <input
-                  id="admin-email"
-                  type="email"
-                  value={profileDraft.email}
-                  onChange={(event) => setProfileDraft((prev) => ({ ...prev, email: event.target.value }))}
-                  className="focus-ring w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary"
-                />
+                <p className="mb-1 text-xs text-text-secondary">Email</p>
+                <p className="break-all rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary">
+                  {profile.email}
+                </p>
               </div>
               <p className="text-xs text-text-secondary">Role: {profile.role}</p>
-              <button
-                type="button"
-                onClick={saveProfile}
-                className="focus-ring flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-2.5 text-sm font-medium text-brand-contrast hover:bg-brand-dark"
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                Save Profile
-              </button>
               <button
                 type="button"
                 onClick={() => void adminLogoutAndRedirect()}
@@ -235,7 +195,6 @@ export function Header() {
                 <LogOut className="h-4 w-4" />
                 Sign out
               </button>
-              {saved && <p className="text-center text-xs text-success">Profile updated.</p>}
             </div>
           </div>
         )}

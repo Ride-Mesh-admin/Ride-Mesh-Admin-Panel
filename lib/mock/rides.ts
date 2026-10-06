@@ -1,6 +1,8 @@
 import type { RideListItem } from "@/lib/types/ride";
 import type { RideDetail } from "@/lib/types/ride";
 
+const emptySafety = { sosCount: 0, helpCount: 0, total: 0 };
+
 export const mockRidesList: RideListItem[] = [
   {
     id: "1",
@@ -11,6 +13,7 @@ export const mockRidesList: RideListItem[] = [
     hostAvatarColor: "orange",
     hostRating: 4.2,
     reportCount: 8,
+    safetySignals: { sosCount: 2, helpCount: 1, total: 3 },
     status: "under_review",
   },
   {
@@ -22,6 +25,7 @@ export const mockRidesList: RideListItem[] = [
     hostAvatarColor: "purple",
     hostRating: 4.9,
     reportCount: 0,
+    safetySignals: emptySafety,
     status: "active",
   },
   {
@@ -33,6 +37,7 @@ export const mockRidesList: RideListItem[] = [
     hostAvatarColor: "teal",
     hostRating: 3.8,
     reportCount: 2,
+    safetySignals: { sosCount: 0, helpCount: 1, total: 1 },
     status: "reported",
   },
   {
@@ -44,6 +49,7 @@ export const mockRidesList: RideListItem[] = [
     hostAvatarColor: "green",
     hostRating: 2.1,
     reportCount: 0,
+    safetySignals: emptySafety,
     status: "flagged_ai",
   },
 ];
@@ -54,18 +60,17 @@ export const mockRideDetails: Record<string, RideDetail> = {
     rideId: "RM-98231",
     riskLevel: "high",
     title: "Commute to Tech Hub",
-    description:
-      "Direct route, fast lane. No pets allowed. Leaving promptly at 8:00 AM.",
+    description: "Direct route, fast lane. No pets allowed. Leaving promptly at 8:00 AM.",
     pickup: "Downtown Station",
     dropoff: "South Tech Hub",
     reportCount: 8,
+    safetySignals: { sosCount: 2, helpCount: 1, total: 3 },
     reportLogs: [
       {
         id: "1",
         title: "Harassment",
         timestamp: "14m ago",
-        description:
-          "Host sent inappropriate messages after booking request.",
+        description: "Host sent inappropriate messages after booking request.",
       },
       {
         id: "2",
@@ -88,6 +93,7 @@ export const mockRideDetails: Record<string, RideDetail> = {
     pickup: "Central Depot",
     dropoff: "Medical Center East",
     reportCount: 0,
+    safetySignals: emptySafety,
     reportLogs: [],
     hostReputation: {
       memberSince: "Mar 2022",
@@ -103,6 +109,7 @@ export const mockRideDetails: Record<string, RideDetail> = {
     pickup: "Seattle Central",
     dropoff: "Portland Downtown",
     reportCount: 2,
+    safetySignals: { sosCount: 0, helpCount: 1, total: 1 },
     reportLogs: [],
     hostReputation: {
       memberSince: "Jun 2023",
@@ -118,6 +125,7 @@ export const mockRideDetails: Record<string, RideDetail> = {
     pickup: "Residential North",
     dropoff: "Financial District",
     reportCount: 0,
+    safetySignals: emptySafety,
     reportLogs: [],
     hostReputation: {
       memberSince: "Sep 2023",

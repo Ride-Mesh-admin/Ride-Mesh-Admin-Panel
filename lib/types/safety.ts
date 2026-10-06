@@ -11,6 +11,10 @@ export interface SafetyAlert {
   alertIcon: "impact" | "warning" | "audio";
   hasLiveIndicator?: boolean;
   avatarColor?: string;
+  photoURL?: string;
+  /** Firestore ride document id */
+  rideId?: string;
+  hostId?: string;
   /** WGS84 — when set, the safety map pins this alert at exact coordinates */
   latitude?: number;
   longitude?: number;

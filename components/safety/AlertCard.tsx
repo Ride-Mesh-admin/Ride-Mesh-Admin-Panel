@@ -4,6 +4,7 @@ import { Check, Megaphone } from "lucide-react";
 import { SosIcon, HelpIcon, WarningIcon } from "@/components/icons/AppIcons";
 import type { SafetyAlert } from "@/lib/types/safety";
 import { SAFETY_ALERT_TYPE_CONFIG } from "@/lib/constants";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 interface AlertCardProps {
   alert: SafetyAlert;
@@ -12,11 +13,7 @@ interface AlertCardProps {
   onNotifyHost: (alert: SafetyAlert) => void | Promise<void>;
   notifyingId?: string | null;
   notifyErrorMessage?: string | null;
-}
-
-function getInitials(name: string): string {
-  const parts = name.split(" ");
-  return parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : name.slice(0, 2).toUpperCase();
+  notifySuccess?: boolean;
 }
 
 function MessageIcon({ icon }: { icon: "impact" | "warning" | "audio" }) {
@@ -33,6 +30,7 @@ export function AlertCard({
   onNotifyHost,
   notifyingId,
   notifyErrorMessage,
+  notifySuccess,
 }: AlertCardProps) {
   const config = SAFETY_ALERT_TYPE_CONFIG[alert.type];
   const avatarBg = alert.avatarColor === "grey" ? "bg-surface" : alert.avatarColor === "blue" ? "bg-blue-500/80" : "bg-brand";
@@ -55,13 +53,13 @@ export function AlertCard({
       <p className="mb-3 mt-2 text-xs text-text-secondary">ACTIVE: {alert.activeDuration}</p>
       <div className="mb-3 flex items-center gap-3">
         <div className="relative shrink-0">
-          <div
-            className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold ${avatarText} ${avatarBg} ${
-              alert.type === "sos_critical" ? "shadow-[0_0_16px_rgba(255,121,24,0.45)]" : ""
-            }`}
-          >
-            {getInitials(alert.userName)}
-          </div>
+          <UserAvatar
+            name={alert.userName}
+            photoURL={alert.photoURL}
+            className={`h-12 w-12 rounded-full ${alert.type === "sos_critical" ? "shadow-[0_0_16px_rgba(255,121,24,0.45)]" : ""}`}
+            textClassName={`text-sm font-bold ${avatarText}`}
+            fallbackClassName={avatarBg}
+          />
           {alert.hasLiveIndicator && (
             <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-soft-pulse rounded-full border-2 border-surface bg-success" />
           )}
@@ -82,6 +80,11 @@ export function AlertCard({
           {notifyErrorMessage}
         </p>
       ) : null}
+      {notifySuccess ? (
+        <p className="mb-2 text-xs text-success" role="status">
+          Message sent to host chat.
+        </p>
+      ) : null}
       <div className="flex gap-2">
         <button
           type="button"
@@ -93,7 +96,7 @@ export function AlertCard({
           className="focus-ring brand-surface-glow flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-brand py-2 text-sm font-medium text-brand-contrast hover:bg-brand-dark disabled:opacity-50"
         >
           <Megaphone className={`h-3.5 w-3.5 shrink-0 ${busy ? "animate-pulse" : ""}`} aria-hidden />
-          {busy ? "Sending…" : "Notify host"}
+          {busy ? "Sending…" : notifySuccess ? "Sent" : "Notify host"}
         </button>
         <button
           type="button"

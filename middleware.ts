@@ -4,10 +4,21 @@ import { ADMIN_SESSION_COOKIE, verifyAdminSessionToken } from "@/lib/server/admi
 
 const LOGIN_PATH = "/login";
 
+const PUBLIC_PAGES = ["/login", "/forgot-password", "/reset-password"] as const;
+const PUBLIC_APIS = [
+  "/api/admin/login",
+  "/api/admin/logout",
+  "/api/admin/forgot-password",
+  "/api/admin/reset-password",
+] as const;
+
 function isPublicPath(pathname: string): boolean {
-  if (pathname === LOGIN_PATH || pathname.startsWith(`${LOGIN_PATH}/`)) return true;
-  if (pathname === "/api/admin/login") return true;
-  if (pathname === "/api/admin/logout") return true;
+  for (const page of PUBLIC_PAGES) {
+    if (pathname === page || pathname.startsWith(`${page}/`)) return true;
+  }
+  for (const api of PUBLIC_APIS) {
+    if (pathname === api) return true;
+  }
   return false;
 }
 
@@ -36,8 +47,11 @@ export async function middleware(request: NextRequest) {
 
   const token = request.cookies.get(ADMIN_SESSION_COOKIE)?.value;
   const authed = await verifyAdminSessionToken(token);
+  const isAuthPage = PUBLIC_PAGES.some(
+    (page) => pathname === page || pathname.startsWith(`${page}/`),
+  );
 
-  if (pathname === LOGIN_PATH || pathname.startsWith(`${LOGIN_PATH}/`)) {
+  if (isAuthPage) {
     if (authed) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }

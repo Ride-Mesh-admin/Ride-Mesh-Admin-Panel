@@ -5,18 +5,11 @@ import { Ban, MoreHorizontal, ShieldCheck } from "lucide-react";
 import type { User } from "@/lib/types/user";
 import type { UserRole, UserStatus } from "@/lib/types/user";
 import { USER_ROLE_CONFIG, USER_STATUS_CONFIG, AVATAR_COLORS } from "@/lib/constants";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 interface UserTableProps {
   users: User[];
   onStatusChange?: (userId: string, status: UserStatus) => Promise<void> | void;
-}
-
-function getInitials(username: string): string {
-  const parts = username.split(/[_.-\s]/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  }
-  return username.slice(0, 2).toUpperCase();
 }
 
 function RoleBadge({ role }: { role: UserRole }) {
@@ -70,11 +63,13 @@ export function UserTable({ users, onStatusChange }: UserTableProps) {
             <tr key={user.id} className="border-b border-border/80 last:border-0 hover:bg-background/40">
               <td className="py-3 pr-4 pl-4">
                 <div className="flex items-center gap-3">
-                  <div
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-semibold ${(AVATAR_COLORS[user.avatarColor] ?? "bg-surface") === "bg-surface" ? "text-text-primary" : "text-brand-contrast"} ${AVATAR_COLORS[user.avatarColor] ?? "bg-surface"}`}
-                  >
-                    {getInitials(user.username)}
-                  </div>
+                  <UserAvatar
+                    name={user.username}
+                    photoURL={user.photoURL}
+                    className="h-10 w-10 rounded-xl"
+                    textClassName={`text-sm font-semibold ${(AVATAR_COLORS[user.avatarColor] ?? "bg-surface") === "bg-surface" ? "text-text-primary" : "text-brand-contrast"}`}
+                    fallbackClassName={AVATAR_COLORS[user.avatarColor] ?? "bg-surface"}
+                  />
                   <div>
                     <p className="font-medium text-text-primary">{user.username}</p>
                     <p className="text-xs text-text-secondary">{user.email}</p>
