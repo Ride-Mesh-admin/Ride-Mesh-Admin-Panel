@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { UsersIcon, SendIcon, ChatIcon } from "@/components/icons/AppIcons";
+import { useAdminQuery, invalidateAdminQuery } from "@/lib/client/useAdminQuery";
+import { useDebouncedValue } from "@/lib/client/debounce";
 import type { NewsletterCampaign, NewsletterSubscriber } from "@/lib/types/newsletter";
 
 type Payload = {
@@ -19,42 +21,35 @@ const STATUS_STYLE: Record<NewsletterCampaign["status"], string> = {
   failed: "bg-danger/15 text-danger border-danger/30",
 };
 
+async function fetchNewsletter(): Promise<Payload> {
+  const res = await fetch("/api/admin/newsletter", { credentials: "include" });
+  if (!res.ok) throw new Error("Failed to load newsletter");
+  return (await res.json()) as Payload;
+}
+
 export default function NewsletterPage() {
-  const [subscribers, setSubscribers] = useState<NewsletterSubscriber[]>([]);
-  const [campaigns, setCampaigns] = useState<NewsletterCampaign[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, reload } = useAdminQuery<Payload>({
+    key: "newsletter",
+    fetcher: fetchNewsletter,
+    refreshInterval: 90_000,
+    staleTime: 25_000,
+  });
+  const subscribers = data?.subscribers ?? [];
+  const campaigns = data?.campaigns ?? [];
+
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/newsletter", { cache: "no-store", credentials: "include" });
-      if (!res.ok) return;
-      const payload = (await res.json()) as Payload;
-      setSubscribers(payload.subscribers || []);
-      setCampaigns(payload.campaigns || []);
-    } catch {
-      // keep current
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 60000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+  const debouncedSearch = useDebouncedValue(search, 200);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     if (!q) return subscribers;
     return subscribers.filter((s) => s.email.includes(q) || s.source.includes(q));
-  }, [search, subscribers]);
+  }, [debouncedSearch, subscribers]);
 
   async function handleSend(event: React.FormEvent) {
     event.preventDefault();
@@ -88,7 +83,8 @@ export default function NewsletterPage() {
       }
       setSubject("");
       setBody("");
-      await load();
+      invalidateAdminQuery("newsletter");
+      await reload();
     } catch {
       setError("Network error — try again.");
     } finally {
@@ -113,7 +109,10 @@ export default function NewsletterPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => {
+              invalidateAdminQuery("newsletter");
+              void reload();
+            }}
             className="focus-ring inline-flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-text-primary hover:bg-surface-variant"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />

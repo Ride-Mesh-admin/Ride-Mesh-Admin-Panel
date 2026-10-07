@@ -1,6 +1,8 @@
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { FieldValue } from "firebase-admin/firestore";
 import { getAdminAuth, getAdminDb, probeFirebaseAdmin } from "@/lib/server/firebaseAdmin";
+import { getDocsByIds, logFirestoreReads } from "@/lib/server/firestoreBatch";
+import { CACHE_TTL, cached, cacheInvalidate } from "@/lib/server/ttlCache";
 import type { AdminNotificationFeedItem } from "@/lib/types/adminNotifications";
 import type { User, UserStatus } from "@/lib/types/user";
 import type { RideDetail, RideListItem, RideStatus } from "@/lib/types/ride";
@@ -89,6 +91,16 @@ function photoFromProfile(data: Record<string, unknown> | undefined): string | u
 /** Fixed sender identity for admin → host chat threads (must exist in `users`). */
 export const ADMIN_CHAT_SENDER_ID = process.env.ADMIN_CHAT_SENDER_ID || "ridemesh_admin";
 
+/** Deterministic thread id — avoids scanning chatThreads on every notify. */
+export function adminSupportThreadId(hostId: string, rideId: string): string {
+  const pair = [ADMIN_CHAT_SENDER_ID, hostId].sort().join("_");
+  return `as_${pair}_${rideId}`.slice(0, 700);
+}
+
+export function invalidateAdminDataCaches(): void {
+  cacheInvalidate("admin:");
+}
+
 function initialsFromName(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
@@ -121,29 +133,39 @@ function mapRideStatus(
 }
 
 export async function fetchUsersData(): Promise<{ users: User[]; total: number; source: DataSource }> {
-  try {
-    const db = getAdminDb();
-    const snapshot = await db.collection("users").orderBy("createdAt", "desc").limit(1500).get();
-    const users: User[] = snapshot.docs.map((doc) => {
-      const data = doc.data();
-      const username = String(data.username || data.fullName || data.email || "User");
-      const role = data.role === "host" ? "host" : "rider";
-      const suspended = data.status === "suspended" || data.isSuspended === true || data.disabled === true;
+  return cached("admin:users", CACHE_TTL.users, async () => {
+    try {
+      const db = getAdminDb();
+      const [snapshot, countSnap] = await Promise.all([
+        db.collection("users").orderBy("createdAt", "desc").limit(200).get(),
+        db.collection("users").count().get().catch(() => null),
+      ]);
+      logFirestoreReads("users", snapshot.size + 1);
+      const users: User[] = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        const username = String(data.username || data.fullName || data.email || "User");
+        const role = data.role === "host" ? "host" : "rider";
+        const suspended = data.status === "suspended" || data.isSuspended === true || data.disabled === true;
+        return {
+          id: doc.id,
+          username,
+          email: String(data.email || "unknown@ridemesh.com"),
+          role,
+          status: suspended ? "suspended" : "active",
+          joinDate: formatShortDate(data.createdAt),
+          avatarColor: colorFromId(doc.id),
+          photoURL: photoFromProfile(data as Record<string, unknown>),
+        };
+      });
       return {
-        id: doc.id,
-        username,
-        email: String(data.email || "unknown@ridemesh.com"),
-        role,
-        status: suspended ? "suspended" : "active",
-        joinDate: formatShortDate(data.createdAt),
-        avatarColor: colorFromId(doc.id),
-        photoURL: photoFromProfile(data as Record<string, unknown>),
+        users,
+        total: countSnap ? countSnap.data().count : users.length,
+        source: "live" as const,
       };
-    });
-    return { users, total: users.length, source: "live" };
-  } catch {
-    return { users: [], total: 0, source: "mock" };
-  }
+    } catch {
+      return { users: [], total: 0, source: "mock" as const };
+    }
+  });
 }
 
 export async function updateUserStatus(
@@ -177,6 +199,7 @@ export async function updateUserStatus(
       timestamp: FieldValue.serverTimestamp(),
     });
 
+    invalidateAdminDataCaches();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Failed to update user." };
@@ -189,168 +212,176 @@ export async function fetchRidesData(): Promise<{
   stats: { activeRides: number; reported: number; moderatorsOnline: number };
   source: DataSource;
 }> {
-  try {
-    const db = getAdminDb();
-    const [ridesSnap, seatReqSnap, usersSnap, sosSnap, helpSnap] = await Promise.all([
-      db.collection("rides").orderBy("createdAt", "desc").limit(500).get(),
-      db.collection("seatRequests").orderBy("createdAt", "desc").limit(1000).get(),
-      db.collection("users").get(),
-      db.collection("sosAlerts").limit(500).get().catch(() => null),
-      db.collection("helpSignals").limit(500).get().catch(() => null),
-    ]);
+  return cached("admin:rides", CACHE_TTL.rides, async () => {
+    try {
+      const db = getAdminDb();
+      const [ridesSnap, seatReqSnap, sosSnap, helpSnap, activeCountSnap] = await Promise.all([
+        db.collection("rides").orderBy("createdAt", "desc").limit(120).get(),
+        db.collection("seatRequests").orderBy("createdAt", "desc").limit(200).get(),
+        db.collection("sosAlerts").orderBy("createdAt", "desc").limit(100).get().catch(() => null),
+        db.collection("helpSignals").orderBy("createdAt", "desc").limit(100).get().catch(() => null),
+        db.collection("rides").where("status", "in", ["ongoing", "active"]).count().get().catch(() => null),
+      ]);
 
-    const hostLookup = new Map(usersSnap.docs.map((doc) => [doc.id, doc.data()]));
-    const hostedCounts = new Map<string, number>();
-    ridesSnap.docs.forEach((doc) => {
-      const hostId = String(doc.data().hostId || "");
-      if (!hostId) return;
-      hostedCounts.set(hostId, (hostedCounts.get(hostId) || 0) + 1);
-    });
+      const hostIds = ridesSnap.docs.map((doc) => String(doc.data().hostId || "")).filter(Boolean);
+      const hostLookup = await getDocsByIds("users", hostIds);
+      logFirestoreReads("rides", ridesSnap.size + seatReqSnap.size + (sosSnap?.size || 0) + (helpSnap?.size || 0) + hostIds.length);
 
-    const safetyByRide = new Map<string, { sosCount: number; helpCount: number }>();
-    sosSnap?.docs.forEach((doc) => {
-      const rideId = String(doc.data().rideId || "");
-      if (!rideId) return;
-      const cur = safetyByRide.get(rideId) || { sosCount: 0, helpCount: 0 };
-      cur.sosCount += 1;
-      safetyByRide.set(rideId, cur);
-    });
-    helpSnap?.docs.forEach((doc) => {
-      const rideId = String(doc.data().rideId || "");
-      if (!rideId) return;
-      const cur = safetyByRide.get(rideId) || { sosCount: 0, helpCount: 0 };
-      cur.helpCount += 1;
-      safetyByRide.set(rideId, cur);
-    });
+      const hostedCounts = new Map<string, number>();
+      for (const id of hostIds) hostedCounts.set(id, (hostedCounts.get(id) || 0) + 1);
 
-    const reportLogsByRide = new Map<string, Array<{ id: string; title: string; timestamp: string; description: string }>>();
-    seatReqSnap.docs.forEach((doc) => {
-      const data = doc.data();
-      const rideId = String(data.rideId || "");
-      if (!rideId) return;
-      const status = String(data.status || "pending");
-      if (!["rejected", "withdrawn", "pending"].includes(status)) return;
-      const rider = String(data.riderUsername || "Rider");
-      const description =
-        status === "rejected"
-          ? `Seat request from ${rider} was rejected.`
-          : status === "withdrawn"
-            ? `${rider} withdrew a previously submitted request.`
-            : `Pending moderation request by ${rider}.`;
-      const list = reportLogsByRide.get(rideId) || [];
-      list.push({
-        id: doc.id,
-        title: status === "pending" ? "Pending Seat Request" : "Seat Request Flag",
-        timestamp: formatRelativeTime(data.updatedAt || data.createdAt),
-        description,
+      const safetyByRide = new Map<string, { sosCount: number; helpCount: number }>();
+      sosSnap?.docs.forEach((doc) => {
+        const rideId = String(doc.data().rideId || "");
+        if (!rideId) return;
+        const cur = safetyByRide.get(rideId) || { sosCount: 0, helpCount: 0 };
+        cur.sosCount += 1;
+        safetyByRide.set(rideId, cur);
       });
-      reportLogsByRide.set(rideId, list);
-    });
+      helpSnap?.docs.forEach((doc) => {
+        const rideId = String(doc.data().rideId || "");
+        if (!rideId) return;
+        const cur = safetyByRide.get(rideId) || { sosCount: 0, helpCount: 0 };
+        cur.helpCount += 1;
+        safetyByRide.set(rideId, cur);
+      });
 
-    const rides: RideListItem[] = [];
-    const detailsById: Record<string, RideDetail> = {};
+      const reportLogsByRide = new Map<string, Array<{ id: string; title: string; timestamp: string; description: string }>>();
+      seatReqSnap.docs.forEach((doc) => {
+        const data = doc.data();
+        const rideId = String(data.rideId || "");
+        if (!rideId) return;
+        const status = String(data.status || "pending");
+        if (!["rejected", "withdrawn", "pending"].includes(status)) return;
+        const rider = String(data.riderUsername || "Rider");
+        const description =
+          status === "rejected"
+            ? `Seat request from ${rider} was rejected.`
+            : status === "withdrawn"
+              ? `${rider} withdrew a previously submitted request.`
+              : `Pending moderation request by ${rider}.`;
+        const list = reportLogsByRide.get(rideId) || [];
+        list.push({
+          id: doc.id,
+          title: status === "pending" ? "Pending Seat Request" : "Seat Request Flag",
+          timestamp: formatRelativeTime(data.updatedAt || data.createdAt),
+          description,
+        });
+        reportLogsByRide.set(rideId, list);
+      });
 
-    for (const doc of ridesSnap.docs) {
-      const data = doc.data();
-      const hostId = String(data.hostId || "");
-      const hostProfile = hostLookup.get(hostId) ?? {};
-      const hostName = String(data.hostUsername || hostProfile.username || hostProfile.fullName || "Unknown Host");
-      const logs = (reportLogsByRide.get(doc.id) || []).slice(0, 8);
-      const reportCount = logs.length;
-      const isBlacklisted = data.isBlacklisted === true || String(data.status || "").toLowerCase() === "blacklisted";
-      const status = mapRideStatus(String(data.status || "upcoming"), reportCount, isBlacklisted);
-      const hostRating = Number(((hostedCounts.get(hostId) || 1) > 3 ? 4.7 : 4.1).toFixed(1));
-      const safety = safetyByRide.get(doc.id) || { sosCount: 0, helpCount: 0 };
-      const safetySignals = {
-        sosCount: safety.sosCount,
-        helpCount: safety.helpCount,
-        total: safety.sosCount + safety.helpCount,
+      const rides: RideListItem[] = [];
+      const detailsById: Record<string, RideDetail> = {};
+
+      for (const doc of ridesSnap.docs) {
+        const data = doc.data();
+        const hostId = String(data.hostId || "");
+        const hostProfile = hostLookup.get(hostId) ?? {};
+        const hostName = String(data.hostUsername || hostProfile.username || hostProfile.fullName || "Unknown Host");
+        const logs = (reportLogsByRide.get(doc.id) || []).slice(0, 8);
+        const reportCount = logs.length;
+        const isBlacklisted = data.isBlacklisted === true || String(data.status || "").toLowerCase() === "blacklisted";
+        const status = mapRideStatus(String(data.status || "upcoming"), reportCount, isBlacklisted);
+        const hostRating = Number(((hostedCounts.get(hostId) || 1) > 3 ? 4.7 : 4.1).toFixed(1));
+        const safety = safetyByRide.get(doc.id) || { sosCount: 0, helpCount: 0 };
+        const safetySignals = {
+          sosCount: safety.sosCount,
+          helpCount: safety.helpCount,
+          total: safety.sosCount + safety.helpCount,
+        };
+
+        rides.push({
+          id: doc.id,
+          title: String(data.title || "Untitled Ride"),
+          subtitle: String(data.type || ""),
+          rideId: `RM-${doc.id.slice(0, 6).toUpperCase()}`,
+          postedAgo: formatRelativeTime(data.createdAt || data.updatedAt),
+          hostName,
+          hostAvatarColor: colorFromId(hostId || doc.id),
+          hostPhotoURL: photoFromProfile(hostProfile as Record<string, unknown>),
+          hostRating,
+          reportCount,
+          safetySignals,
+          status,
+          isBlacklisted,
+        });
+
+        detailsById[doc.id] = {
+          id: doc.id,
+          rideId: `RM-${doc.id.slice(0, 6).toUpperCase()}`,
+          riskLevel: safetySignals.total >= 2 || reportCount >= 4 ? "high" : reportCount >= 2 ? "medium" : "low",
+          title: String(data.title || "Untitled Ride"),
+          description: String(data.description || "No additional description provided."),
+          pickup: String(data.startLocationLabel || "Unknown pickup"),
+          dropoff: String(data.endLocationLabel || "Unknown dropoff"),
+          reportCount,
+          safetySignals,
+          reportLogs: logs,
+          isBlacklisted,
+          hostReputation: {
+            memberSince: formatShortDate(hostProfile.createdAt || Date.now()),
+            ridesHosted: hostedCounts.get(hostId) || 0,
+            pastWarnings: reportCount,
+          },
+        };
+      }
+
+      const stats = {
+        activeRides: activeCountSnap ? activeCountSnap.data().count : rides.filter((r) => r.status === "active").length,
+        reported: rides.filter((ride) => ride.safetySignals.total > 0 || ride.reportCount > 0).length,
+        moderatorsOnline: Math.max(1, Math.min(12, Math.floor(rides.length / 20) + 2)),
       };
 
-      rides.push({
-        id: doc.id,
-        title: String(data.title || "Untitled Ride"),
-        subtitle: String(data.type || ""),
-        rideId: `RM-${doc.id.slice(0, 6).toUpperCase()}`,
-        postedAgo: formatRelativeTime(data.createdAt || data.updatedAt),
-        hostName,
-        hostAvatarColor: colorFromId(hostId || doc.id),
-        hostPhotoURL: photoFromProfile(hostProfile as Record<string, unknown>),
-        hostRating,
-        reportCount,
-        safetySignals,
-        status,
-        isBlacklisted,
-      });
-
-      detailsById[doc.id] = {
-        id: doc.id,
-        rideId: `RM-${doc.id.slice(0, 6).toUpperCase()}`,
-        riskLevel: safetySignals.total >= 2 || reportCount >= 4 ? "high" : reportCount >= 2 ? "medium" : "low",
-        title: String(data.title || "Untitled Ride"),
-        description: String(data.description || "No additional description provided."),
-        pickup: String(data.startLocationLabel || "Unknown pickup"),
-        dropoff: String(data.endLocationLabel || "Unknown dropoff"),
-        reportCount,
-        safetySignals,
-        reportLogs: logs,
-        isBlacklisted,
-        hostReputation: {
-          memberSince: formatShortDate(hostProfile.createdAt || Date.now()),
-          ridesHosted: hostedCounts.get(hostId) || 0,
-          pastWarnings: reportCount,
-        },
+      return { rides, detailsById, stats, source: "live" as const };
+    } catch {
+      return {
+        rides: [],
+        detailsById: {},
+        stats: { activeRides: 0, reported: 0, moderatorsOnline: 0 },
+        source: "mock" as const,
       };
     }
-
-    const stats = {
-      activeRides: rides.filter((ride) => ride.status === "active").length,
-      reported: rides.filter((ride) => ride.safetySignals.total > 0 || ride.reportCount > 0).length,
-      moderatorsOnline: Math.max(1, Math.min(12, Math.floor(rides.length / 20) + 2)),
-    };
-
-    return { rides, detailsById, stats, source: "live" };
-  } catch {
-    return {
-      rides: [],
-      detailsById: {},
-      stats: { activeRides: 0, reported: 0, moderatorsOnline: 0 },
-      source: "mock",
-    };
-  }
+  });
 }
 
 export async function fetchSafetyData(): Promise<{
   alerts: SafetyAlert[];
   source: DataSource;
 }> {
-  try {
-    const db = getAdminDb();
-    const [sosSnap, helpSnap, usersSnap, ridesSnap] = await Promise.all([
-      db.collection("sosAlerts").orderBy("createdAt", "desc").limit(200).get(),
-      db.collection("helpSignals").orderBy("createdAt", "desc").limit(200).get(),
-      db.collection("users").get(),
-      db.collection("rides").get(),
-    ]);
+  return cached("admin:safety", CACHE_TTL.safety, async () => {
+    try {
+      const db = getAdminDb();
+      const [sosSnap, helpSnap] = await Promise.all([
+        db.collection("sosAlerts").where("status", "==", "active").orderBy("createdAt", "desc").limit(80).get(),
+        db.collection("helpSignals").where("status", "==", "open").orderBy("createdAt", "desc").limit(80).get(),
+      ]);
 
-    const userLookup = new Map(usersSnap.docs.map((doc) => [doc.id, doc.data()]));
-    const rideLookup = new Map(ridesSnap.docs.map((doc) => [doc.id, doc.data()]));
+      const userIds: string[] = [];
+      const rideIds: string[] = [];
+      for (const doc of [...sosSnap.docs, ...helpSnap.docs]) {
+        const d = doc.data();
+        if (d.userId) userIds.push(String(d.userId));
+        if (d.rideId) rideIds.push(String(d.rideId));
+      }
+      const [userLookup, rideLookup] = await Promise.all([
+        getDocsByIds("users", userIds),
+        getDocsByIds("rides", rideIds),
+      ]);
+      logFirestoreReads("safety", sosSnap.size + helpSnap.size + userIds.length + rideIds.length);
 
-    const alerts: SafetyAlert[] = [];
+      const alerts: SafetyAlert[] = [];
 
-    sosSnap.docs
-      .filter((doc) => String(doc.data().status || "active") === "active")
-      .forEach((doc) => {
+      sosSnap.docs.forEach((doc) => {
         const data = doc.data();
         const raw = data as Record<string, unknown>;
         const user = userLookup.get(String(data.userId || "")) || {};
         const ride = rideLookup.get(String(data.rideId || "")) || {};
-        const userName = String(user.username || user.fullName || "Unknown User");
-        const alertId = `sos-${doc.id}`;
-        const createdAtMs = toMillis(data.createdAt);
+        const userName = String(
+          data.userName || user.username || user.fullName || "Unknown User",
+        );
         const rideId = String(data.rideId || "");
         alerts.push({
-          id: alertId,
+          id: `sos-${doc.id}`,
           type: "sos_critical",
           activeDuration: formatRelativeTime(data.createdAt).replace(" ago", ""),
           userName,
@@ -363,24 +394,22 @@ export async function fetchSafetyData(): Promise<{
           photoURL: photoFromProfile(user as Record<string, unknown>),
           rideId: rideId || undefined,
           hostId: String(ride.hostId || "") || undefined,
-          createdAtMs,
+          createdAtMs: toMillis(data.createdAt),
           ...alertCoordsFromDoc(raw),
         });
       });
 
-    helpSnap.docs
-      .filter((doc) => String(doc.data().status || "open") === "open")
-      .forEach((doc) => {
+      helpSnap.docs.forEach((doc) => {
         const data = doc.data();
         const raw = data as Record<string, unknown>;
         const user = userLookup.get(String(data.userId || "")) || {};
         const ride = rideLookup.get(String(data.rideId || "")) || {};
-        const userName = String(user.username || user.fullName || "Unknown User");
-        const alertId = `help-${doc.id}`;
-        const createdAtMs = toMillis(data.createdAt);
+        const userName = String(
+          data.userName || user.username || user.fullName || "Unknown User",
+        );
         const rideId = String(data.rideId || "");
         alerts.push({
-          id: alertId,
+          id: `help-${doc.id}`,
           type: "help_signal",
           activeDuration: formatRelativeTime(data.createdAt).replace(" ago", ""),
           userName,
@@ -392,22 +421,87 @@ export async function fetchSafetyData(): Promise<{
           photoURL: photoFromProfile(user as Record<string, unknown>),
           rideId: rideId || undefined,
           hostId: String(ride.hostId || "") || undefined,
-          createdAtMs,
+          createdAtMs: toMillis(data.createdAt),
           ...alertCoordsFromDoc(raw),
         });
       });
 
-    alerts.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
-    return {
-      alerts: alerts.slice(0, 100),
-      source: "live",
-    };
-  } catch {
-    return {
-      alerts: [],
-      source: "mock",
-    };
-  }
+      alerts.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
+      return { alerts: alerts.slice(0, 100), source: "live" as const };
+    } catch {
+      // Fallback without composite index: unordered limited reads
+      try {
+        const db = getAdminDb();
+        const [sosSnap, helpSnap] = await Promise.all([
+          db.collection("sosAlerts").orderBy("createdAt", "desc").limit(80).get(),
+          db.collection("helpSignals").orderBy("createdAt", "desc").limit(80).get(),
+        ]);
+        const userIds: string[] = [];
+        const rideIds: string[] = [];
+        const sosActive = sosSnap.docs.filter((d) => String(d.data().status || "active") === "active");
+        const helpOpen = helpSnap.docs.filter((d) => String(d.data().status || "open") === "open");
+        for (const doc of [...sosActive, ...helpOpen]) {
+          const d = doc.data();
+          if (d.userId) userIds.push(String(d.userId));
+          if (d.rideId) rideIds.push(String(d.rideId));
+        }
+        const [userLookup, rideLookup] = await Promise.all([
+          getDocsByIds("users", userIds),
+          getDocsByIds("rides", rideIds),
+        ]);
+        const alerts: SafetyAlert[] = [];
+        for (const doc of sosActive) {
+          const data = doc.data();
+          const user = userLookup.get(String(data.userId || "")) || {};
+          const ride = rideLookup.get(String(data.rideId || "")) || {};
+          const rideId = String(data.rideId || "");
+          alerts.push({
+            id: `sos-${doc.id}`,
+            type: "sos_critical",
+            activeDuration: formatRelativeTime(data.createdAt).replace(" ago", ""),
+            userName: String(user.username || user.fullName || "Unknown User"),
+            tripId: `RMM-${(rideId || doc.id).slice(0, 6).toUpperCase()}`,
+            vehicle: String(ride.vehicleType || "Unknown Vehicle"),
+            alertMessage: "HIGH IMPACT DETECTED",
+            alertIcon: "impact",
+            hasLiveIndicator: true,
+            avatarColor: colorFromId(String(data.userId || doc.id)),
+            photoURL: photoFromProfile(user as Record<string, unknown>),
+            rideId: rideId || undefined,
+            hostId: String(ride.hostId || "") || undefined,
+            createdAtMs: toMillis(data.createdAt),
+            ...alertCoordsFromDoc(data as Record<string, unknown>),
+          });
+        }
+        for (const doc of helpOpen) {
+          const data = doc.data();
+          const user = userLookup.get(String(data.userId || "")) || {};
+          const ride = rideLookup.get(String(data.rideId || "")) || {};
+          const rideId = String(data.rideId || "");
+          alerts.push({
+            id: `help-${doc.id}`,
+            type: "help_signal",
+            activeDuration: formatRelativeTime(data.createdAt).replace(" ago", ""),
+            userName: String(user.username || user.fullName || "Unknown User"),
+            tripId: `RMM-${(rideId || doc.id).slice(0, 6).toUpperCase()}`,
+            vehicle: String(ride.vehicleType || "Unknown Vehicle"),
+            alertMessage: String(data.message || "OFF-ROUTE WARNING").toUpperCase(),
+            alertIcon: "warning",
+            avatarColor: colorFromId(String(data.userId || doc.id)),
+            photoURL: photoFromProfile(user as Record<string, unknown>),
+            rideId: rideId || undefined,
+            hostId: String(ride.hostId || "") || undefined,
+            createdAtMs: toMillis(data.createdAt),
+            ...alertCoordsFromDoc(data as Record<string, unknown>),
+          });
+        }
+        alerts.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
+        return { alerts: alerts.slice(0, 100), source: "live" as const };
+      } catch {
+        return { alerts: [], source: "mock" as const };
+      }
+    }
+  });
 }
 
 /** Shown in the host app chat when admin uses “Notify host” from Safety Alerts. */
@@ -435,7 +529,7 @@ async function ensureAdminChatSenderProfile(): Promise<void> {
   if (!snap.exists) {
     await ref.set({
       ...base,
-      email: process.env.ADMIN_EMAIL || "admin@ride-mesh.app",
+      email: process.env.ADMIN_EMAIL || "admin@ride-mesh.app", // domain mailbox (forwards to ops inbox)
       createdAt: FieldValue.serverTimestamp(),
     });
     return;
@@ -489,31 +583,10 @@ export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: b
         ? `${ADMIN_HOST_EMERGENCY_BODY}\n\nAlert type: SOS critical on ride “${rideTitle}”.`
         : `${ADMIN_HOST_EMERGENCY_BODY}\n\nAlert type: Help signal on ride “${rideTitle}”.`;
 
-    // Prefer an existing admin↔host thread for this ride; otherwise create one.
-    const existing = await db
-      .collection("chatThreads")
-      .where("rideId", "==", rideId)
-      .where("participantIds", "array-contains", hostId)
-      .limit(20)
-      .get();
-
-    let threadId: string | null = null;
-    for (const docSnap of existing.docs) {
-      const ids = ((docSnap.data().participantIds as string[]) || []).slice().sort();
-      if (ids.length === 2 && ids[0] === participantIds[0] && ids[1] === participantIds[1]) {
-        threadId = docSnap.id;
-        break;
-      }
-      // Also match threads already marked as admin support for this ride+host
-      if (docSnap.data().isAdminThread === true && ids.includes(hostId) && ids.includes(senderId)) {
-        threadId = docSnap.id;
-        break;
-      }
-    }
-
-    if (!threadId) {
-      const threadRef = db.collection("chatThreads").doc();
-      threadId = threadRef.id;
+    const threadId = adminSupportThreadId(hostId, rideId);
+    const threadRef = db.collection("chatThreads").doc(threadId);
+    const threadSnap = await threadRef.get();
+    if (!threadSnap.exists) {
       await threadRef.set({
         rideId,
         participantIds,
@@ -528,7 +601,7 @@ export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: b
     const now = new Date();
     const previewText = messageText.length > 180 ? `${messageText.slice(0, 180).trimEnd()}…` : messageText;
 
-    await db.collection("chatThreads").doc(threadId).collection("messages").add({
+    await threadRef.collection("messages").add({
       senderId,
       text: messageText,
       type: "text",
@@ -541,7 +614,7 @@ export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: b
       source: "safety_alerts_console",
     });
 
-    await db.collection("chatThreads").doc(threadId).set(
+    await threadRef.set(
       {
         rideTitle,
         isAdminThread: true,
@@ -587,6 +660,7 @@ export async function notifyHostForSafetyAlert(alertId: string): Promise<{ ok: b
       dismissed: false,
     });
 
+    invalidateAdminDataCaches();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Failed to notify host." };
@@ -600,145 +674,155 @@ export async function fetchDashboardData(): Promise<{
   liveLogs: LogEntry[];
   source: DataSource;
 }> {
-  try {
-    const db = getAdminDb();
-    const now = Date.now();
-    const prevDay = new Date(now - 24 * 60 * 60 * 1000);
-    const twoDays = new Date(now - 48 * 60 * 60 * 1000);
+  return cached("admin:dashboard", CACHE_TTL.dashboard, async () => {
+    try {
+      const db = getAdminDb();
+      const now = Date.now();
+      const prevDay = new Date(now - 24 * 60 * 60 * 1000);
+      const twoDays = new Date(now - 48 * 60 * 60 * 1000);
 
-    const [usersNow, usersPrev, ridesSnap, sosSnap, helpSnap, notificationsSnap, logsSnap] = await Promise.all([
-      db.collection("users").where("createdAt", ">=", prevDay).get(),
-      db.collection("users").where("createdAt", ">=", twoDays).where("createdAt", "<", prevDay).get(),
-      db.collection("rides").where("status", "in", ["ongoing", "active"]).get(),
-      db.collection("sosAlerts").where("status", "==", "active").get(),
-      db.collection("helpSignals").where("status", "==", "open").get(),
-      db.collection("notifications").orderBy("createdAt", "desc").limit(50).get(),
-      db.collection("systemLogs").orderBy("timestamp", "desc").limit(20).get().catch(() => null),
-    ]);
+      const [usersNow, usersPrev, activeRidesCount, sosSnap, helpSnap, logsSnap, totalUsersSnap] =
+        await Promise.all([
+          db.collection("users").where("createdAt", ">=", prevDay).count().get().catch(() => null),
+          db
+            .collection("users")
+            .where("createdAt", ">=", twoDays)
+            .where("createdAt", "<", prevDay)
+            .count()
+            .get()
+            .catch(() => null),
+          db.collection("rides").where("status", "in", ["ongoing", "active"]).count().get().catch(() => null),
+          db.collection("sosAlerts").where("status", "==", "active").orderBy("createdAt", "desc").limit(8).get(),
+          db.collection("helpSignals").where("status", "==", "open").orderBy("createdAt", "desc").limit(8).get(),
+          db.collection("systemLogs").orderBy("timestamp", "desc").limit(5).get().catch(() => null),
+          db.collection("users").count().get(),
+        ]);
 
-    const totalUsers = (await db.collection("users").count().get()).data().count;
-    const deltaRaw = usersPrev.size === 0 ? 100 : Math.round(((usersNow.size - usersPrev.size) / usersPrev.size) * 100);
-    const totalUsersDelta = `${deltaRaw >= 0 ? "+" : ""}${deltaRaw}%`;
+      const sosCountSnap = await db.collection("sosAlerts").where("status", "==", "active").count().get().catch(() => null);
+      const helpCountSnap = await db.collection("helpSignals").where("status", "==", "open").count().get().catch(() => null);
 
-    const metrics: DashboardMetrics = {
-      totalUsers,
-      totalUsersDelta,
-      activeRides: ridesSnap.size,
-      activeRidesLive: true,
-      openReports: helpSnap.size + sosSnap.size,
-      openReportsPriority: helpSnap.size + sosSnap.size > 10 ? "Critical" : "High",
-      sosAlerts: sosSnap.size,
-      sosAlertsStatus: sosSnap.size > 0 ? "URGENT" : "Stable",
-    };
+      const sosCount = sosCountSnap?.data().count ?? sosSnap.size;
+      const helpCount = helpCountSnap?.data().count ?? helpSnap.size;
+      const totalUsers = totalUsersSnap.data().count;
+      const usersNowN = usersNow?.data().count ?? 0;
+      const usersPrevN = usersPrev?.data().count ?? 0;
+      const deltaRaw = usersPrevN === 0 ? 100 : Math.round(((usersNowN - usersPrevN) / usersPrevN) * 100);
 
-    const criticalAlert: CriticalAlert = {
-      title: sosSnap.size > 0 ? "Critical Safety Breach Detected" : "No Critical SOS Incidents",
-      description:
-        sosSnap.size > 0
-          ? `${sosSnap.size} unresolved SOS signals detected. Emergency protocols active.`
-          : "Safety signal volume is stable across active trips.",
-      count: sosSnap.size,
-      sector: "LIVE",
-    };
-
-    const usersSnapForReports = await db.collection("users").get().catch(() => null);
-    const userNameById = new Map(
-      (usersSnapForReports?.docs || []).map((doc) => {
+      const userIds: string[] = [];
+      const rideIds: string[] = [];
+      for (const doc of [...sosSnap.docs, ...helpSnap.docs]) {
         const d = doc.data();
-        return [doc.id, String(d.username || d.fullName || "User")] as const;
-      }),
-    );
-    const ridesSnapForReports = await db.collection("rides").get().catch(() => null);
-    const rideHostMeta = new Map(
-      (ridesSnapForReports?.docs || []).map((doc) => {
-        const d = doc.data();
-        const hostId = String(d.hostId || "");
-        return [
-          doc.id,
-          {
-            hostId,
-            hostLabel: String(d.hostUsername || userNameById.get(hostId) || "Host"),
-          },
-        ] as const;
-      }),
-    );
+        if (d.userId) userIds.push(String(d.userId));
+        if (d.rideId) rideIds.push(String(d.rideId));
+      }
+      const [userLookup, rideLookup] = await Promise.all([
+        getDocsByIds("users", userIds),
+        getDocsByIds("rides", rideIds),
+      ]);
+      logFirestoreReads(
+        "dashboard",
+        sosSnap.size + helpSnap.size + userIds.length + rideIds.length + 8,
+      );
 
-    const reportRows: RideReport[] = [];
-    sosSnap.docs.slice(0, 6).forEach((doc) => {
-      const data = doc.data();
-      const rideId = String(data.rideId || "");
-      const hostMeta = rideHostMeta.get(rideId);
-      reportRows.push({
-        id: `SOS-${doc.id.slice(0, 6).toUpperCase()}`,
-        userName: userNameById.get(String(data.userId || "")) || "Unknown rider",
-        driverName: hostMeta?.hostLabel || "Host",
-        severity: "high",
-        status: "pending",
-        href: "/safety-alerts",
-      });
-    });
-    helpSnap.docs.slice(0, 6).forEach((doc) => {
-      const data = doc.data();
-      const rideId = String(data.rideId || "");
-      const hostMeta = rideHostMeta.get(rideId);
-      reportRows.push({
-        id: `HLP-${doc.id.slice(0, 6).toUpperCase()}`,
-        userName: userNameById.get(String(data.userId || "")) || "Unknown rider",
-        driverName: hostMeta?.hostLabel || "Host",
-        severity: "medium",
-        status: "in_review",
-        href: "/safety-alerts",
-      });
-    });
-    const reports: RideReport[] = reportRows.slice(0, 8);
+      const metrics: DashboardMetrics = {
+        totalUsers,
+        totalUsersDelta: `${deltaRaw >= 0 ? "+" : ""}${deltaRaw}%`,
+        activeRides: activeRidesCount?.data().count ?? 0,
+        activeRidesLive: true,
+        openReports: helpCount + sosCount,
+        openReportsPriority: helpCount + sosCount > 10 ? "Critical" : "High",
+        sosAlerts: sosCount,
+        sosAlertsStatus: sosCount > 0 ? "URGENT" : "Stable",
+      };
 
-    const liveLogs: LogEntry[] = logsSnap && logsSnap.docs.length > 0
-      ? logsSnap.docs.slice(0, 5).map((doc) => {
-          const data = doc.data();
-          return {
-            time: formatTime(data.timestamp || data.createdAt),
-            eventType: String(data.module || data.eventType || "SYSTEM_EVENT"),
-            message: String(data.message || "System event recorded."),
-          };
-        })
-      : notificationsSnap.docs.slice(0, 5).map((doc) => {
-          const data = doc.data();
-          return {
-            time: formatTime(data.createdAt),
-            eventType: String(data.type || "NOTIFICATION").toUpperCase(),
-            message: String(data.message || data.title || "Notification event"),
-          };
+      const criticalAlert: CriticalAlert = {
+        title: sosCount > 0 ? "Critical Safety Breach Detected" : "No Critical SOS Incidents",
+        description:
+          sosCount > 0
+            ? `${sosCount} unresolved SOS signals detected. Emergency protocols active.`
+            : "Safety signal volume is stable across active trips.",
+        count: sosCount,
+        sector: "LIVE",
+      };
+
+      const reportRows: RideReport[] = [];
+      sosSnap.docs.forEach((doc) => {
+        const data = doc.data();
+        const rideId = String(data.rideId || "");
+        const ride = rideLookup.get(rideId) || {};
+        const hostId = String(ride.hostId || "");
+        const host = hostId ? userLookup.get(hostId) : undefined;
+        reportRows.push({
+          id: `SOS-${doc.id.slice(0, 6).toUpperCase()}`,
+          userName: String(userLookup.get(String(data.userId || ""))?.username || userLookup.get(String(data.userId || ""))?.fullName || "Unknown rider"),
+          driverName: String(ride.hostUsername || host?.username || host?.fullName || "Host"),
+          severity: "high",
+          status: "pending",
+          href: "/safety-alerts",
         });
+      });
+      helpSnap.docs.forEach((doc) => {
+        const data = doc.data();
+        const rideId = String(data.rideId || "");
+        const ride = rideLookup.get(rideId) || {};
+        const hostId = String(ride.hostId || "");
+        const host = hostId ? userLookup.get(hostId) : undefined;
+        reportRows.push({
+          id: `HLP-${doc.id.slice(0, 6).toUpperCase()}`,
+          userName: String(userLookup.get(String(data.userId || ""))?.username || userLookup.get(String(data.userId || ""))?.fullName || "Unknown rider"),
+          driverName: String(ride.hostUsername || host?.username || host?.fullName || "Host"),
+          severity: "medium",
+          status: "in_review",
+          href: "/safety-alerts",
+        });
+      });
 
-    return {
-      criticalAlert,
-      metrics,
-      reports,
-      liveLogs,
-      source: "live",
-    };
-  } catch {
-    return {
-      criticalAlert: {
-        title: "Unable to load safety status",
-        description: "Firebase connection failed. Retry shortly.",
-        count: 0,
-      },
-      metrics: {
-        totalUsers: 0,
-        totalUsersDelta: "0%",
-        activeRides: 0,
-        activeRidesLive: false,
-        openReports: 0,
-        openReportsPriority: "—",
-        sosAlerts: 0,
-        sosAlertsStatus: "—",
-      },
-      reports: [],
-      liveLogs: [],
-      source: "mock",
-    };
-  }
+      const liveLogs: LogEntry[] =
+        logsSnap && logsSnap.docs.length > 0
+          ? logsSnap.docs.map((doc) => {
+              const data = doc.data();
+              return {
+                time: formatTime(data.timestamp || data.createdAt),
+                eventType: String(data.module || data.eventType || "SYSTEM_EVENT"),
+                message: String(data.message || "System event recorded."),
+              };
+            })
+          : reportRows.slice(0, 5).map((r) => ({
+              time: formatTime(Date.now()),
+              eventType: "SAFETY",
+              message: `${r.id} · ${r.userName}`,
+            }));
+
+      return {
+        criticalAlert,
+        metrics,
+        reports: reportRows.slice(0, 8),
+        liveLogs,
+        source: "live" as const,
+      };
+    } catch {
+      return {
+        criticalAlert: {
+          title: "Unable to load safety status",
+          description: "Firebase connection failed. Retry shortly.",
+          count: 0,
+        },
+        metrics: {
+          totalUsers: 0,
+          totalUsersDelta: "0%",
+          activeRides: 0,
+          activeRidesLive: false,
+          openReports: 0,
+          openReportsPriority: "—",
+          sosAlerts: 0,
+          sosAlertsStatus: "—",
+        },
+        reports: [],
+        liveLogs: [],
+        source: "mock" as const,
+      };
+    }
+  });
 }
 
 export async function fetchSystemLogsData(): Promise<{
@@ -747,154 +831,162 @@ export async function fetchSystemLogsData(): Promise<{
   serviceId: string;
   source: DataSource;
 }> {
-  try {
-    const db = getAdminDb();
-    const [logsSnap, notifSnap, ridesSnap] = await Promise.all([
-      db.collection("systemLogs").orderBy("timestamp", "desc").limit(400).get().catch(() => null),
-      db.collection("notifications").orderBy("createdAt", "desc").limit(200).get(),
-      db.collection("rides").where("status", "in", ["ongoing", "active"]).get(),
-    ]);
+  return cached("admin:systemLogs", CACHE_TTL.systemLogs, async () => {
+    try {
+      const db = getAdminDb();
+      const [logsSnap, notifSnap] = await Promise.all([
+        db.collection("systemLogs").orderBy("timestamp", "desc").limit(200).get().catch(() => null),
+        db.collection("notifications").orderBy("createdAt", "desc").limit(80).get(),
+      ]);
+      logFirestoreReads("systemLogs", (logsSnap?.size ?? 0) + notifSnap.size);
 
-    let logs: SystemActivityLog[] = [];
+      let logs: SystemActivityLog[] = [];
 
-    if (logsSnap && !logsSnap.empty) {
-      logs = logsSnap.docs.map((doc) => {
-        const data = doc.data();
-        const rawSeverity = String(data.severity || "info").toLowerCase();
-        const severity: SystemActivityLog["severity"] =
-          rawSeverity === "error" ? "error" : rawSeverity === "warn" ? "warn" : "info";
-        const responseMs = parseResponseTimeMs(data.responseTime || data.responseTimeMs || data.latencyMs);
-        return {
-          id: doc.id,
-          timestamp: formatTime(data.timestamp || data.createdAt),
-          severity,
-          module: String(data.module || "CORE"),
-          message: String(data.message || "No message"),
-          responseTime: `${responseMs || 0}ms`,
-        };
-      });
-    } else {
-      logs = notifSnap.docs.map((doc) => {
-        const data = doc.data();
-        const type = String(data.type || "info").toLowerCase();
-        const severity: SystemActivityLog["severity"] = type.includes("error") || type.includes("sos")
-          ? "error"
-          : type.includes("warn")
-            ? "warn"
-            : "info";
-        return {
-          id: doc.id,
-          timestamp: formatTime(data.createdAt),
-          severity,
-          module: "NOTIFICATION",
-          message: String(data.message || data.title || "Notification event"),
-          responseTime: `${severity === "error" ? 850 : 120}ms`,
-        };
-      });
+      if (logsSnap && !logsSnap.empty) {
+        logs = logsSnap.docs.map((doc) => {
+          const data = doc.data();
+          const rawSeverity = String(data.severity || "info").toLowerCase();
+          const severity: SystemActivityLog["severity"] =
+            rawSeverity === "error" ? "error" : rawSeverity === "warn" ? "warn" : "info";
+          const responseMs = parseResponseTimeMs(data.responseTime || data.responseTimeMs || data.latencyMs);
+          return {
+            id: doc.id,
+            timestamp: formatTime(data.timestamp || data.createdAt),
+            severity,
+            module: String(data.module || "CORE"),
+            message: String(data.message || "No message"),
+            responseTime: `${responseMs || 0}ms`,
+          };
+        });
+      } else {
+        logs = notifSnap.docs.map((doc) => {
+          const data = doc.data();
+          const type = String(data.type || "info").toLowerCase();
+          const severity: SystemActivityLog["severity"] = type.includes("error") || type.includes("sos")
+            ? "error"
+            : type.includes("warn")
+              ? "warn"
+              : "info";
+          return {
+            id: doc.id,
+            timestamp: formatTime(data.createdAt),
+            severity,
+            module: "NOTIFICATION",
+            message: String(data.message || data.title || "Notification event"),
+            responseTime: `${severity === "error" ? 850 : 120}ms`,
+          };
+        });
+      }
+
+      const errorCount = logs.filter((item) => item.severity === "error").length;
+      const warnCount = logs.filter((item) => item.severity === "warn").length;
+      const dbLoad = Math.min(95, Math.max(12, warnCount + Math.floor(errorCount * 1.4)));
+
+      const status: SystemStatusBar = {
+        apiSync: { status: errorCount > 20 ? "API SYNC DEGRADED" : "API SYNC OK", ok: errorCount <= 20 },
+        dbLoad: `DB LOAD: ${dbLoad}%`,
+        uptime: errorCount > 30 ? "UPTIME: 99.20%" : "UPTIME: 99.99%",
+        memory: `${(4.2 + warnCount * 0.01).toFixed(1)}GB / 16GB`,
+      };
+
+      const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+      return {
+        logs: logs.slice(0, 300),
+        status,
+        serviceId: projectId ? `RIDE-MESH-${projectId.toUpperCase()}` : SERVICE_ID,
+        source: "live" as const,
+      };
+    } catch {
+      return {
+        logs: [],
+        status: {
+          apiSync: { status: "API SYNC OFFLINE", ok: false },
+          dbLoad: "DB LOAD: —",
+          uptime: "UPTIME: —",
+          memory: "—",
+        },
+        serviceId: SERVICE_ID,
+        source: "mock" as const,
+      };
     }
-
-    const errorCount = logs.filter((item) => item.severity === "error").length;
-    const warnCount = logs.filter((item) => item.severity === "warn").length;
-    const dbLoad = Math.min(95, Math.max(12, warnCount + Math.floor(errorCount * 1.4)));
-
-    const status: SystemStatusBar = {
-      apiSync: { status: errorCount > 20 ? "API SYNC DEGRADED" : "API SYNC OK", ok: errorCount <= 20 },
-      dbLoad: `DB LOAD: ${dbLoad}%`,
-      uptime: errorCount > 30 ? "UPTIME: 99.20%" : "UPTIME: 99.99%",
-      memory: `${(4.2 + warnCount * 0.01).toFixed(1)}GB / 16GB`,
-    };
-
-    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-    return {
-      logs: logs.slice(0, 300),
-      status,
-      serviceId: projectId ? `RIDE-MESH-${projectId.toUpperCase()}` : SERVICE_ID,
-      source: "live",
-    };
-  } catch {
-    return {
-      logs: [],
-      status: {
-        apiSync: { status: "API SYNC OFFLINE", ok: false },
-        dbLoad: "DB LOAD: —",
-        uptime: "UPTIME: —",
-        memory: "—",
-      },
-      serviceId: SERVICE_ID,
-      source: "mock",
-    };
-  }
+  });
 }
 
 export async function fetchAdminNotificationFeed(): Promise<AdminNotificationFeedItem[]> {
-  const items: AdminNotificationFeedItem[] = [];
-  try {
-    const db = getAdminDb();
-
-    const sosSnap = await db.collection("sosAlerts").orderBy("createdAt", "desc").limit(40).get();
-    sosSnap.docs.forEach((doc) => {
-      const data = doc.data();
-      const rideRef = String(data.rideId || doc.id);
-      const manual = String(data.reason || data.source || "").toLowerCase().includes("manual");
-      items.push({
-        id: `nf-sos-${doc.id}`,
-        title: manual ? "Manual SOS created" : "Emergency SOS created",
-        message: `SOS alert — ride ${rideRef.slice(0, 10)}… (${String(data.status || "active")}).`,
-        timestamp: formatRelativeTime(data.createdAt),
-        priority: "critical",
-        createdAtMs: toMillis(data.createdAt),
-      });
-    });
-
-    const helpSnap = await db.collection("helpSignals").orderBy("createdAt", "desc").limit(40).get();
-    helpSnap.docs.forEach((doc) => {
-      const data = doc.data();
-      items.push({
-        id: `nf-help-${doc.id}`,
-        title: "Help request created",
-        message: `${String(data.message || "User requested assistance")} · Ride ${String(data.rideId || "n/a")}.`,
-        timestamp: formatRelativeTime(data.createdAt),
-        priority: "high",
-        createdAtMs: toMillis(data.createdAt),
-      });
-    });
-
-    let deletionDocs: QueryDocumentSnapshot[] = [];
+  return cached("admin:notifications", CACHE_TTL.notifications, async () => {
+    const items: AdminNotificationFeedItem[] = [];
     try {
-      const delSnap = await db.collection("accountDeletions").orderBy("createdAt", "desc").limit(40).get();
-      deletionDocs = delSnap.docs;
-    } catch {
-      try {
-        const nSnap = await db.collection("notifications").orderBy("createdAt", "desc").limit(200).get();
-        deletionDocs = nSnap.docs.filter((d) => {
-          const t = String(d.data().type || "").toLowerCase();
-          return (t.includes("account") && t.includes("delet")) || t === "user_deleted" || t === "account_deleted";
+      const db = getAdminDb();
+
+      const [sosSnap, helpSnap] = await Promise.all([
+        db.collection("sosAlerts").orderBy("createdAt", "desc").limit(30).get(),
+        db.collection("helpSignals").orderBy("createdAt", "desc").limit(30).get(),
+      ]);
+
+      sosSnap.docs.forEach((doc) => {
+        const data = doc.data();
+        const rideRef = String(data.rideId || doc.id);
+        const manual = String(data.reason || data.source || "").toLowerCase().includes("manual");
+        items.push({
+          id: `nf-sos-${doc.id}`,
+          title: manual ? "Manual SOS created" : "Emergency SOS created",
+          message: `SOS alert — ride ${rideRef.slice(0, 10)}… (${String(data.status || "active")}).`,
+          timestamp: formatRelativeTime(data.createdAt),
+          priority: "critical",
+          createdAtMs: toMillis(data.createdAt),
         });
-      } catch {
-        deletionDocs = [];
-      }
-    }
-
-    deletionDocs.forEach((doc) => {
-      const data = doc.data();
-      const label = String(
-        data.email || data.userEmail || data.username || data.userName || data.userId || doc.id,
-      ).slice(0, 96);
-      items.push({
-        id: `nf-del-${doc.id}`,
-        title: "User deleted their account",
-        message: `Account deletion recorded for ${label}.`,
-        timestamp: formatRelativeTime(data.createdAt || data.requestedAt || data.deletedAt),
-        priority: "normal",
-        createdAtMs: toMillis(data.createdAt || data.requestedAt || data.deletedAt),
       });
-    });
 
-    items.sort((a, b) => b.createdAtMs - a.createdAtMs);
-    return items.slice(0, 100);
-  } catch {
-    return [];
-  }
+      helpSnap.docs.forEach((doc) => {
+        const data = doc.data();
+        items.push({
+          id: `nf-help-${doc.id}`,
+          title: "Help request created",
+          message: `${String(data.message || "User requested assistance")} · Ride ${String(data.rideId || "n/a")}.`,
+          timestamp: formatRelativeTime(data.createdAt),
+          priority: "high",
+          createdAtMs: toMillis(data.createdAt),
+        });
+      });
+
+      let deletionDocs: QueryDocumentSnapshot[] = [];
+      try {
+        const delSnap = await db.collection("accountDeletions").orderBy("createdAt", "desc").limit(30).get();
+        deletionDocs = delSnap.docs;
+      } catch {
+        try {
+          const nSnap = await db.collection("notifications").orderBy("createdAt", "desc").limit(80).get();
+          deletionDocs = nSnap.docs.filter((d) => {
+            const t = String(d.data().type || "").toLowerCase();
+            return (t.includes("account") && t.includes("delet")) || t === "user_deleted" || t === "account_deleted";
+          });
+        } catch {
+          deletionDocs = [];
+        }
+      }
+
+      deletionDocs.forEach((doc) => {
+        const data = doc.data();
+        const label = String(
+          data.email || data.userEmail || data.username || data.userName || data.userId || doc.id,
+        ).slice(0, 96);
+        items.push({
+          id: `nf-del-${doc.id}`,
+          title: "User deleted their account",
+          message: `Account deletion recorded for ${label}.`,
+          timestamp: formatRelativeTime(data.createdAt || data.requestedAt || data.deletedAt),
+          priority: "normal",
+          createdAtMs: toMillis(data.createdAt || data.requestedAt || data.deletedAt),
+        });
+      });
+
+      logFirestoreReads("notifications-feed", sosSnap.size + helpSnap.size + deletionDocs.length);
+      items.sort((a, b) => b.createdAtMs - a.createdAtMs);
+      return items.slice(0, 100);
+    } catch {
+      return [];
+    }
+  });
 }
 
 export async function moderateRide(
@@ -916,6 +1008,7 @@ export async function moderateRide(
         message: `Ride ${rideId} blacklisted by admin.`,
         timestamp: FieldValue.serverTimestamp(),
       });
+      invalidateAdminDataCaches();
       return { ok: true };
     }
     const status = action === "approve" ? "approved" : "cancelled";
@@ -925,6 +1018,7 @@ export async function moderateRide(
       adminModeratedAt: FieldValue.serverTimestamp(),
       adminModerationAction: action,
     });
+    invalidateAdminDataCaches();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -936,44 +1030,47 @@ export async function fetchNewsletterData(): Promise<{
   campaigns: NewsletterCampaign[];
   source: DataSource;
 }> {
-  try {
-    const db = getAdminDb();
-    const [subsSnap, campaignsSnap] = await Promise.all([
-      db.collection("newsletterSubscribers").orderBy("createdAt", "desc").limit(2000).get(),
-      db.collection("newsletterCampaigns").orderBy("createdAt", "desc").limit(50).get(),
-    ]);
+  return cached("admin:newsletter", CACHE_TTL.newsletter, async () => {
+    try {
+      const db = getAdminDb();
+      const [subsSnap, campaignsSnap] = await Promise.all([
+        db.collection("newsletterSubscribers").orderBy("createdAt", "desc").limit(500).get(),
+        db.collection("newsletterCampaigns").orderBy("createdAt", "desc").limit(50).get(),
+      ]);
+      logFirestoreReads("newsletter", subsSnap.size + campaignsSnap.size);
 
-    const subscribers: NewsletterSubscriber[] = subsSnap.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        email: String(data.email || doc.id),
-        source: String(data.source || "landing"),
-        subscribedAt: formatShortDate(data.createdAt),
-        createdAtMs: toMillis(data.createdAt),
-      };
-    });
+      const subscribers: NewsletterSubscriber[] = subsSnap.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          email: String(data.email || doc.id),
+          source: String(data.source || "landing"),
+          subscribedAt: formatShortDate(data.createdAt),
+          createdAtMs: toMillis(data.createdAt),
+        };
+      });
 
-    const campaigns: NewsletterCampaign[] = campaignsSnap.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        subject: String(data.subject || ""),
-        preview: String(data.preview || data.body || "").slice(0, 160),
-        status: (String(data.status || "queued") as NewsletterCampaign["status"]),
-        recipientCount: Number(data.recipientCount || 0),
-        sentCount: Number(data.sentCount || 0),
-        failedCount: Number(data.failedCount || 0),
-        providerError: data.providerError ? String(data.providerError) : null,
-        createdAt: formatRelativeTime(data.createdAt),
-        createdAtMs: toMillis(data.createdAt),
-      };
-    });
+      const campaigns: NewsletterCampaign[] = campaignsSnap.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          subject: String(data.subject || ""),
+          preview: String(data.preview || data.body || "").slice(0, 160),
+          status: (String(data.status || "queued") as NewsletterCampaign["status"]),
+          recipientCount: Number(data.recipientCount || 0),
+          sentCount: Number(data.sentCount || 0),
+          failedCount: Number(data.failedCount || 0),
+          providerError: data.providerError ? String(data.providerError) : null,
+          createdAt: formatRelativeTime(data.createdAt),
+          createdAtMs: toMillis(data.createdAt),
+        };
+      });
 
-    return { subscribers, campaigns, source: "live" };
-  } catch {
-    return { subscribers: [], campaigns: [], source: "mock" };
-  }
+      return { subscribers, campaigns, source: "live" as const };
+    } catch {
+      return { subscribers: [], campaigns: [], source: "mock" as const };
+    }
+  });
 }
 
 async function deliverViaResend(opts: {
@@ -1136,6 +1233,7 @@ export async function sendNewsletterCampaign(input: {
         message: `Campaign queued for ${recipients.length} subscribers (no email provider configured).`,
         timestamp: FieldValue.serverTimestamp(),
       });
+      invalidateAdminDataCaches();
       return { ok: true, campaignId: campaignRef.id, sent: 0, failed: 0, queued: true };
     }
 
@@ -1156,6 +1254,7 @@ export async function sendNewsletterCampaign(input: {
       timestamp: FieldValue.serverTimestamp(),
     });
 
+    invalidateAdminDataCaches();
     return {
       ok: status !== "failed",
       campaignId: campaignRef.id,

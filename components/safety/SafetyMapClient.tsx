@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, InfoWindowF, MarkerF, useGoogleMap, useJsApiLoader } from "@react-google-maps/api";
 import type { SafetyAlert } from "@/lib/types/safety";
 import { alertMapPosition, alertMarkerColor, alertMarkerLabel } from "@/lib/safety/alertMapUtils";
@@ -44,6 +44,7 @@ function MapViewportSync({
   positions: Map<string, { lat: number; lng: number }>;
 }) {
   const map = useGoogleMap();
+  const lastFitKey = useRef<string>("");
 
   useEffect(() => {
     if (!map || typeof window === "undefined" || !window.google) return;
@@ -59,6 +60,10 @@ function MapViewportSync({
     }
 
     if (alerts.length === 0) return;
+
+    const fitKey = alerts.map((a) => a.id).join(",");
+    if (fitKey === lastFitKey.current) return;
+    lastFitKey.current = fitKey;
 
     const bounds = new google.maps.LatLngBounds();
     for (const alert of alerts) {
@@ -100,14 +105,6 @@ export default function SafetyMapClient({
     return m;
   }, [alerts]);
 
-  const initialCenter = useMemo(() => {
-    if (selectedAlertId && positions.get(selectedAlertId)) {
-      return positions.get(selectedAlertId)!;
-    }
-    const first = alerts[0];
-    return first ? alertMapPosition(first) : DEFAULT_CENTER;
-  }, [alerts, positions, selectedAlertId]);
-
   const onMarkerClick = useCallback((alertId: string) => {
     setInfoWindowAlertId(alertId);
   }, []);
@@ -117,14 +114,6 @@ export default function SafetyMapClient({
     [alerts, infoWindowAlertId],
   );
   const infoPosition = infoAlert ? positions.get(infoAlert.id) : undefined;
-
-  if (alerts.length === 0) {
-    return (
-      <div className="flex h-full min-h-[200px] w-full max-h-full items-center justify-center rounded-lg border border-border bg-surface text-sm text-text-secondary">
-        No alerts to show on the map.
-      </div>
-    );
-  }
 
   if (!apiKey) {
     return (
@@ -160,7 +149,7 @@ export default function SafetyMapClient({
     <div className="relative h-full min-h-0 w-full max-h-full overflow-hidden rounded-lg border border-border">
       <GoogleMap
         mapContainerStyle={mapContainerStyle}
-        center={initialCenter}
+        center={DEFAULT_CENTER}
         zoom={12}
         options={mapOptions}
       >
@@ -196,6 +185,13 @@ export default function SafetyMapClient({
           </InfoWindowF>
         ) : null}
       </GoogleMap>
+      {alerts.length === 0 ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+          <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs text-text-secondary shadow-sm">
+            No alerts to show on the map
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

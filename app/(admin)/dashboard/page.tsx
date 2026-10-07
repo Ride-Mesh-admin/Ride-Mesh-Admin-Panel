@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { CriticalSafetyBanner } from "@/components/dashboard/CriticalSafetyBanner";
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { RecentReportsTable } from "@/components/dashboard/RecentReportsTable";
 import { LiveSystemLogs } from "@/components/dashboard/LiveSystemLogs";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { useAdminQuery } from "@/lib/client/useAdminQuery";
 import type { CriticalAlert } from "@/lib/types/alert";
 import type { DashboardMetrics } from "@/lib/types/metric";
 import type { RideReport } from "@/lib/types/report";
@@ -18,6 +18,12 @@ type DashboardPayload = {
   reports: RideReport[];
   liveLogs: LogEntry[];
 };
+
+async function fetchDashboard(): Promise<DashboardPayload> {
+  const response = await fetch("/api/admin/dashboard", { credentials: "include" });
+  if (!response.ok) throw new Error("Failed to load dashboard");
+  return (await response.json()) as DashboardPayload;
+}
 
 function DashboardSkeleton() {
   return (
@@ -37,32 +43,12 @@ function DashboardSkeleton() {
 }
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let isMounted = true;
-    async function loadDashboard() {
-      try {
-        const response = await fetch("/api/admin/dashboard", { cache: "no-store", credentials: "include" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as DashboardPayload & { source?: "live" | "mock" };
-        if (isMounted) {
-          setData(payload);
-        }
-      } catch {
-        // Keep empty until a successful load.
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-    void loadDashboard();
-    const timer = window.setInterval(loadDashboard, 30000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(timer);
-    };
-  }, []);
+  const { data, loading } = useAdminQuery<DashboardPayload>({
+    key: "dashboard",
+    fetcher: fetchDashboard,
+    refreshInterval: 45_000,
+    staleTime: 10_000,
+  });
 
   return (
     <div className="space-y-6">

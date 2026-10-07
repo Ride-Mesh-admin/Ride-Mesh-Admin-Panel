@@ -143,14 +143,12 @@ middleware.ts       # Session gate for pages + APIs
 
 ## Auth model
 
-1. On first successful auth path, the admin account is bootstrapped into Firestore (`adminAccounts/primary`) from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (or local defaults).
-2. Passwords are stored with **scrypt** hashes — never plaintext after bootstrap.
-3. `POST /api/admin/login` verifies against the hashed Firestore account.
-4. Server issues a **30-day** HS256 JWT in the `ridemesh_admin_session` httpOnly cookie.
-5. `/account` lets the signed-in admin update profile and password.
-6. Forgot password: `/forgot-password` emails a one-hour reset link via **Resend** (set `RESEND_API_KEY` + `ADMIN_APP_URL`).
+1. Admin credentials live in Firestore `adminAccounts/primary` (email + scrypt `passwordHash`).
+2. Seed defaults / env: `admin@ride-mesh.app` (forwards to ridemeshadmin@gmail.com) — used only to create/migrate that doc.
+3. `POST /api/admin/login` verifies the Firestore hash, then issues a **30-day** JWT in the `ridemesh_admin_session` httpOnly cookie.
+4. `/account` updates profile/password in Firestore; forgot-password uses Resend + reset token on the same doc.
 
-Set strong unique bootstrap credentials and `ADMIN_SESSION_SECRET` in every production environment. After the first deploy, change the password under **Account**.
+Set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `ADMIN_SESSION_SECRET` on Vercel Production so the seed matches your deploy.
 
 ---
 

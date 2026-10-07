@@ -54,10 +54,10 @@ const DEFAULT_SETTINGS: AdminSettings = {
 };
 
 const DEFAULT_PROFILE: AdminProfile = {
-  name: "K Patterson",
+  name: "Admin",
   role: "System Overseer",
-  email: "Kristopher@ridemesh.app",
-  initials: "KP",
+  email: "admin@ride-mesh.app",
+  initials: "AD",
   lastLogin: "Today, 9:42 PM",
 };
 
@@ -71,10 +71,12 @@ function applyTheme(theme: ThemePreference) {
 
 function normalizeProfileFromStorage(partial: Partial<AdminProfile>): AdminProfile {
   const merged: AdminProfile = { ...DEFAULT_PROFILE, ...partial };
-  const legacyMarcus =
+  const legacy =
     merged.name.trim().toLowerCase() === "marcus vane" ||
-    merged.email.trim().toLowerCase() === "marcus.vane@ridemesh.com";
-  if (legacyMarcus) {
+    merged.email.trim().toLowerCase() === "marcus.vane@ridemesh.com" ||
+    merged.email.trim().toLowerCase() === "kristopher@ridemesh.app" ||
+    merged.name.trim().toLowerCase() === "k patterson";
+  if (legacy) {
     return {
       ...merged,
       name: DEFAULT_PROFILE.name,
@@ -196,8 +198,9 @@ export function AdminPanelProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function poll() {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       try {
-        const res = await fetch("/api/admin/notifications-feed", { cache: "no-store" });
+        const res = await fetch("/api/admin/notifications-feed", { credentials: "include" });
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as { items: AdminNotificationFeedItem[] };
         feedCacheRef.current = data.items;
@@ -228,11 +231,28 @@ export function AdminPanelProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    let timer: number | undefined;
+    function schedule() {
+      window.clearInterval(timer);
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      timer = window.setInterval(() => void poll(), 45000);
+    }
+    function onVisibility() {
+      if (document.visibilityState === "visible") {
+        void poll();
+        schedule();
+      } else {
+        window.clearInterval(timer);
+      }
+    }
+
     void poll();
-    const timer = window.setInterval(poll, 25000);
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [ready, settings.pushNotifications, mergeFeedToNotifications]);
 

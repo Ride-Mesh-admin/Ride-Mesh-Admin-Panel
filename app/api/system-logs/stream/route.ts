@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { fetchSystemLogsData } from "@/lib/server/adminBackend";
+import { jsonCached } from "@/lib/server/httpCache";
 
 export async function GET() {
   const payload = await fetchSystemLogsData();
-  return NextResponse.json(payload, { status: 200 });
+  return jsonCached(payload, 12);
 }

@@ -4,9 +4,11 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { AlertCard } from "@/components/safety/AlertCard";
 import { SafetyMap } from "@/components/safety/SafetyMap";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { useAdminQuery } from "@/lib/client/useAdminQuery";
 import type { SafetyAlert } from "@/lib/types/safety";
 
 type FilterTab = "all" | "sos_only" | "help_signals" | "resolved";
+type SafetyPayload = { alerts: SafetyAlert[] };
 
 const SAFETY_MAP_MAX_HEIGHT_PX = 560;
 const SAFETY_MAP_MIN_HEIGHT_PX = 320;
@@ -14,6 +16,12 @@ const SAFETY_MAP_MIN_HEIGHT_PX = 320;
 function formatUTC(): string {
   const now = new Date();
   return now.toISOString().slice(11, 19) + " UTC";
+}
+
+async function fetchSafety(): Promise<SafetyPayload> {
+  const response = await fetch("/api/admin/safety-alerts", { credentials: "include" });
+  if (!response.ok) throw new Error("Failed to load safety alerts");
+  return (await response.json()) as SafetyPayload;
 }
 
 function SafetySkeleton() {
@@ -35,38 +43,20 @@ function SafetySkeleton() {
 }
 
 export default function SafetyAlertsPage() {
-  const [alerts, setAlerts] = useState<SafetyAlert[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading } = useAdminQuery<SafetyPayload>({
+    key: "safety",
+    fetcher: fetchSafety,
+    refreshInterval: 30_000,
+    staleTime: 8_000,
+  });
+  const alerts = data?.alerts ?? [];
+
   const [filter, setFilter] = useState<FilterTab>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [utcTime, setUtcTime] = useState(formatUTC());
   const [notifyingId, setNotifyingId] = useState<string | null>(null);
   const [notifyErrorByAlertId, setNotifyErrorByAlertId] = useState<Record<string, string>>({});
   const [notifySuccessByAlertId, setNotifySuccessByAlertId] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    let isMounted = true;
-    async function loadAlerts() {
-      try {
-        const response = await fetch("/api/admin/safety-alerts", { cache: "no-store", credentials: "include" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as { alerts: SafetyAlert[] };
-        if (isMounted) {
-          setAlerts(payload.alerts);
-        }
-      } catch {
-        // Keep empty until a successful load.
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-    void loadAlerts();
-    const timer = window.setInterval(loadAlerts, 30000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(timer);
-    };
-  }, []);
 
   useEffect(() => {
     if (alerts.length === 0) {
@@ -98,11 +88,7 @@ export default function SafetyAlertsPage() {
 
   const handleNotifyHost = useCallback(async (alert: SafetyAlert) => {
     setNotifyingId(alert.id);
-    setNotifySuccessByAlertId((prev) => {
-      const next = { ...prev };
-      delete next[alert.id];
-      return next;
-    });
+    setNotifySuccessByAlertId((prev) => ({ ...prev, [alert.id]: true }));
     setNotifyErrorByAlertId((prev) => {
       const next = { ...prev };
       delete next[alert.id];
@@ -115,16 +101,25 @@ export default function SafetyAlertsPage() {
         credentials: "include",
         body: JSON.stringify({ alertId: alert.id }),
       });
-      const data = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-      if (!response.ok || !data.ok) {
+      const result = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!response.ok || !result.ok) {
+        setNotifySuccessByAlertId((prev) => {
+          const next = { ...prev };
+          delete next[alert.id];
+          return next;
+        });
         setNotifyErrorByAlertId((prev) => ({
           ...prev,
-          [alert.id]: data.error || "Notify host failed.",
+          [alert.id]: result.error || "Notify host failed.",
         }));
         return;
       }
-      setNotifySuccessByAlertId((prev) => ({ ...prev, [alert.id]: true }));
     } catch {
+      setNotifySuccessByAlertId((prev) => {
+        const next = { ...prev };
+        delete next[alert.id];
+        return next;
+      });
       setNotifyErrorByAlertId((prev) => ({
         ...prev,
         [alert.id]: "Network error — try again.",
@@ -148,7 +143,7 @@ export default function SafetyAlertsPage() {
         <span className="text-sm text-text-secondary">{utcTime}</span>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <SafetySkeleton />
       ) : (
         <div className="flex min-h-[500px] flex-col gap-4 lg:flex-row">

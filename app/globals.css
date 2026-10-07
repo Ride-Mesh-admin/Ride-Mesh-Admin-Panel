@@ -59,6 +59,16 @@
   }
 }
 
+/* Light only — do not touch dark styles here */
+html:not([data-theme="dark"]) .help-signal-badge {
+  background-color: #6b7280;
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .help-signal-badge {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
 @keyframes soft-pulse {
   0%,
   100% {

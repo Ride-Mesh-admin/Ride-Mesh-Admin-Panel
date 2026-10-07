@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { fetchUsersData, updateUserStatus } from "@/lib/server/adminBackend";
+import { jsonCached, jsonNoStore } from "@/lib/server/httpCache";
 import type { UserStatus } from "@/lib/types/user";
 
 export async function GET() {
   const payload = await fetchUsersData();
-  return NextResponse.json(payload, { status: 200 });
+  return jsonCached(payload, 15);
 }
 
 export async function PATCH(request: Request) {
@@ -22,5 +23,5 @@ export async function PATCH(request: Request) {
   }
 
   const result = await updateUserStatus(userId, status);
-  return NextResponse.json(result, { status: result.ok ? 200 : 400 });
+  return jsonNoStore(result, result.ok ? 200 : 400);
 }

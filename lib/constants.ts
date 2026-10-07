@@ -58,6 +58,10 @@ export const SAFETY_ALERT_TYPE_CONFIG: Record<
   { label: string; badgeClass: string; messageIconColor: string }
 > = {
   sos_critical: { label: "SOS CRITICAL", badgeClass: "bg-brand text-brand-contrast", messageIconColor: "text-danger" },
-  help_signal: { label: "HELP SIGNAL", badgeClass: "bg-warning text-text-primary", messageIconColor: "text-warning" },
+  help_signal: {
+    label: "HELP SIGNAL",
+    badgeClass: "help-signal-badge",
+    messageIconColor: "text-warning",
+  },
   manual_sos: { label: "MANUAL SOS", badgeClass: "bg-blue-500 text-brand-contrast", messageIconColor: "text-blue-400" },
 };

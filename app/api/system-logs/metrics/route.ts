@@ -1,6 +1,8 @@
-import { NextResponse } from "next/server";
 import type { Query, QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { getAdminDb } from "@/lib/server/firebaseAdmin";
+import { jsonCached } from "@/lib/server/httpCache";
+import { CACHE_TTL, cached } from "@/lib/server/ttlCache";
+import { logFirestoreReads } from "@/lib/server/firestoreBatch";
 import type { SystemLogsMetrics } from "@/lib/types/log";
 
 function parseMillis(raw: unknown): number | null {
@@ -74,114 +76,129 @@ function metricsFromLogs(logs: QueryDocumentSnapshot[], sinceMs: number): Pick<S
   };
 }
 
-export async function GET() {
+const EMPTY_METRICS: SystemLogsMetrics = {
+  totalErrors1h: 0,
+  totalErrorsDelta: "0%",
+  totalErrorsDeltaUp: false,
+  avgLatency: "—",
+  avgLatencyDelta: "0%",
+  avgLatencyDeltaUp: false,
+  requestsPerSec: 0,
+  requestsStatus: "—",
+  activeDrivers: 0,
+  activeDriversStatus: "—",
+};
+
+async function computeMetrics(): Promise<SystemLogsMetrics> {
+  const db = getAdminDb();
+  const now = Date.now();
+  const oneHourMs = 60 * 60 * 1000;
+  const tenMinutesMs = 10 * 60 * 1000;
+  const currentStartMs = now - oneHourMs;
+  const previousStartMs = now - oneHourMs * 2;
+
+  const currentStartDate = new Date(currentStartMs);
+  const previousStartDate = new Date(previousStartMs);
+  const activeDriversStartDate = new Date(now - tenMinutesMs);
+
+  let totalErrors1h = 0;
+  let avgLatency = "—";
+  let totalErrorsPrevious = 0;
+  let avgLatencyPrevious = 0;
+  let logsRead = 0;
+
   try {
-    const db = getAdminDb();
-    const now = Date.now();
-    const oneHourMs = 60 * 60 * 1000;
-    const tenMinutesMs = 10 * 60 * 1000;
-    const currentStartMs = now - oneHourMs;
-    const previousStartMs = now - oneHourMs * 2;
+    const logsSnapshot = await db
+      .collection("systemLogs")
+      .where("timestamp", ">=", previousStartDate)
+      .orderBy("timestamp", "desc")
+      .limit(400)
+      .get();
 
-    const nowDate = new Date(now);
-    const currentStartDate = new Date(currentStartMs);
-    const previousStartDate = new Date(previousStartMs);
-    const activeDriversStartDate = new Date(now - tenMinutesMs);
+    if (!logsSnapshot.empty) {
+      logsRead = logsSnapshot.size;
+      const logs = logsSnapshot.docs;
+      const currentWindow = metricsFromLogs(logs, currentStartMs);
+      const previousWindow = metricsFromLogs(logs, previousStartMs);
 
-    let totalErrors1h = 0;
-    let avgLatency = "—";
-    let totalErrorsPrevious = 0;
-    let avgLatencyPrevious = 0;
-
-    try {
-      const logsSnapshot = await db
-        .collection("systemLogs")
-        .where("timestamp", ">=", previousStartDate)
-        .orderBy("timestamp", "desc")
-        .limit(1500)
-        .get();
-
-      if (!logsSnapshot.empty) {
-        const logs = logsSnapshot.docs;
-        const currentWindow = metricsFromLogs(logs, currentStartMs);
-        const previousWindow = metricsFromLogs(logs, previousStartMs);
-
-        totalErrors1h = currentWindow.totalErrors1h;
-        avgLatency = currentWindow.avgLatency;
-        totalErrorsPrevious = previousWindow.totalErrors1h;
-        avgLatencyPrevious = Number.parseInt(previousWindow.avgLatency.replace("ms", ""), 10) || avgLatencyPrevious;
-      }
-    } catch {
-      const notifCurrent = await countQuery(db.collection("notifications").where("createdAt", ">=", currentStartDate));
-      const notifPrev = await countQuery(
-        db.collection("notifications").where("createdAt", ">=", previousStartDate).where("createdAt", "<", currentStartDate),
-      );
-      totalErrors1h = Math.round(notifCurrent * 0.08);
-      totalErrorsPrevious = Math.max(1, Math.round(notifPrev * 0.08));
+      totalErrors1h = currentWindow.totalErrors1h;
+      avgLatency = currentWindow.avgLatency;
+      totalErrorsPrevious = previousWindow.totalErrors1h;
+      avgLatencyPrevious = Number.parseInt(previousWindow.avgLatency.replace("ms", ""), 10) || avgLatencyPrevious;
     }
+  } catch {
+    const notifCurrent = await countQuery(db.collection("notifications").where("createdAt", ">=", currentStartDate));
+    const notifPrev = await countQuery(
+      db.collection("notifications").where("createdAt", ">=", previousStartDate).where("createdAt", "<", currentStartDate),
+    );
+    totalErrors1h = Math.round(notifCurrent * 0.08);
+    totalErrorsPrevious = Math.max(1, Math.round(notifPrev * 0.08));
+  }
 
-    const [notifCount, seatReqCount, helpCount, sosCount, activeRides] = await Promise.all([
-      countQuery(db.collection("notifications").where("createdAt", ">=", currentStartDate)),
-      countQuery(db.collection("seatRequests").where("createdAt", ">=", currentStartDate)),
-      countQuery(db.collection("helpSignals").where("createdAt", ">=", currentStartDate)),
-      countQuery(db.collection("sosAlerts").where("createdAt", ">=", currentStartDate)),
-      db.collection("rides").where("status", "==", "active").get(),
-    ]);
+  const [notifCount, seatReqCount, helpCount, sosCount, activeRidesCount] = await Promise.all([
+    countQuery(db.collection("notifications").where("createdAt", ">=", currentStartDate)),
+    countQuery(db.collection("seatRequests").where("createdAt", ">=", currentStartDate)),
+    countQuery(db.collection("helpSignals").where("createdAt", ">=", currentStartDate)),
+    countQuery(db.collection("sosAlerts").where("createdAt", ">=", currentStartDate)),
+    db.collection("rides").where("status", "==", "active").count().get().catch(() => null),
+  ]);
 
-    const requestEvents = notifCount + seatReqCount + helpCount + sosCount;
-    const requestsPerSec = Math.max(1, Math.round(requestEvents / 3600));
+  const requestEvents = notifCount + seatReqCount + helpCount + sosCount;
+  const requestsPerSec = Math.max(1, Math.round(requestEvents / 3600));
 
-    const activeHostIds = new Set<string>();
+  const activeHostIds = new Set<string>();
+  try {
+    const liveLocations = await db.collection("rideLocations").where("updatedAt", ">=", activeDriversStartDate).limit(200).get();
+    logsRead += liveLocations.size;
+    liveLocations.forEach((doc) => {
+      const hostId = doc.data().hostId;
+      if (typeof hostId === "string" && hostId.length > 0) activeHostIds.add(hostId);
+    });
+  } catch {
+    // Fallback below.
+  }
+
+  if (activeHostIds.size === 0) {
     try {
-      const liveLocations = await db.collection("rideLocations").where("updatedAt", ">=", activeDriversStartDate).get();
-      liveLocations.forEach((doc) => {
-        const hostId = doc.data().hostId;
-        if (typeof hostId === "string" && hostId.length > 0) activeHostIds.add(hostId);
-      });
-    } catch {
-      // Fallback to active rides below.
-    }
-
-    if (activeHostIds.size === 0) {
+      const activeRides = await db.collection("rides").where("status", "==", "active").limit(100).get();
+      logsRead += activeRides.size;
       activeRides.forEach((doc) => {
         const hostId = doc.data().hostId;
         if (typeof hostId === "string" && hostId.length > 0) activeHostIds.add(hostId);
       });
+    } catch {
+      // leave empty
     }
+  }
 
-    const activeDrivers = activeHostIds.size;
+  const activeDrivers =
+    activeHostIds.size || activeRidesCount?.data().count || 0;
 
-    const errorsDelta = percentDelta(totalErrors1h, totalErrorsPrevious);
-    const avgLatencyCurrentValue = Number.parseInt(avgLatency.replace("ms", ""), 10);
-    const latencyDelta = percentDelta(avgLatencyCurrentValue, avgLatencyPrevious);
+  const errorsDelta = percentDelta(totalErrors1h, totalErrorsPrevious);
+  const avgLatencyCurrentValue = Number.parseInt(avgLatency.replace("ms", ""), 10);
+  const latencyDelta = percentDelta(avgLatencyCurrentValue, avgLatencyPrevious);
 
-    const metrics: SystemLogsMetrics = {
-      totalErrors1h,
-      totalErrorsDelta: errorsDelta.value,
-      totalErrorsDeltaUp: errorsDelta.isUp,
-      avgLatency,
-      avgLatencyDelta: latencyDelta.value,
-      avgLatencyDeltaUp: latencyDelta.isUp,
-      requestsPerSec,
-      requestsStatus: requestsPerSec > 3 ? "High Load" : "Normal",
-      activeDrivers,
-      activeDriversStatus: activeDrivers > 0 ? "Live Now" : "Idle",
-    };
+  logFirestoreReads("system-logs/metrics", logsRead + 6);
 
-    return NextResponse.json(metrics, { status: 200 });
+  return {
+    totalErrors1h,
+    totalErrorsDelta: errorsDelta.value,
+    totalErrorsDeltaUp: errorsDelta.isUp,
+    avgLatency,
+    avgLatencyDelta: latencyDelta.value,
+    avgLatencyDeltaUp: latencyDelta.isUp,
+    requestsPerSec,
+    requestsStatus: requestsPerSec > 3 ? "High Load" : "Normal",
+    activeDrivers,
+    activeDriversStatus: activeDrivers > 0 ? "Live Now" : "Idle",
+  };
+}
+
+export async function GET() {
+  try {
+    const metrics = await cached("admin:systemLogsMetrics", CACHE_TTL.systemLogs, computeMetrics);
+    return jsonCached(metrics, 12);
   } catch {
-    const empty: SystemLogsMetrics = {
-      totalErrors1h: 0,
-      totalErrorsDelta: "0%",
-      totalErrorsDeltaUp: false,
-      avgLatency: "—",
-      avgLatencyDelta: "0%",
-      avgLatencyDeltaUp: false,
-      requestsPerSec: 0,
-      requestsStatus: "—",
-      activeDrivers: 0,
-      activeDriversStatus: "—",
-    };
-    return NextResponse.json(empty, { status: 200 });
+    return jsonCached(EMPTY_METRICS, 5);
   }
 }

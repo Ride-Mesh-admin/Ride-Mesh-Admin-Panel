@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { fetchAdminNotificationFeed } from "@/lib/server/adminBackend";
+import { jsonCached } from "@/lib/server/httpCache";
 
 export async function GET() {
   const items = await fetchAdminNotificationFeed();
-  return NextResponse.json({ items }, { status: 200 });
+  return jsonCached({ items }, 10);
 }

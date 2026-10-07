@@ -62,7 +62,7 @@ export default function ForgotPasswordPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 className="focus-ring w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-text-primary"
-                placeholder="you@ridemesh.app"
+                placeholder="admin@ride-mesh.app"
               />
             </div>
             {error && (

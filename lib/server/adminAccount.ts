@@ -21,6 +21,7 @@ type AdminAccountRecord = {
   name: string;
   role: string;
   passwordHash: string;
+  credentialsVersion?: number;
   updatedAt?: Timestamp | null;
   passwordUpdatedAt?: Timestamp | null;
   resetTokenHash?: string | null;
@@ -28,9 +29,15 @@ type AdminAccountRecord = {
   lastResetRequestAt?: Timestamp | null;
 };
 
-/** Single admin — bootstrap from env on first run. */
-export const ADMIN_EMAIL_DEFAULT = "Kristopher@ridemesh.app";
-export const ADMIN_PASSWORD_DEFAULT = "KP@3000$";
+/**
+ * Bootstrap seed only — used to create/migrate `adminAccounts/primary`.
+ * After seed, login verifies against the Firestore scrypt hash + JWT session cookie.
+ */
+export const ADMIN_EMAIL_DEFAULT = "admin@ride-mesh.app";
+export const ADMIN_PASSWORD_DEFAULT = "KPatterson@1";
+
+/** Bump to re-seed email + password hash into Firestore once (does not overwrite later Account changes). */
+const CREDENTIALS_SEED_VERSION = 3;
 
 function bootstrapEmail(): string {
   return (process.env.ADMIN_EMAIL || ADMIN_EMAIL_DEFAULT).trim().toLowerCase();
@@ -97,6 +104,7 @@ async function readAccount(): Promise<AdminAccountRecord | null> {
     name: (data.name || "Admin").trim() || "Admin",
     role: (data.role || "System Overseer").trim() || "System Overseer",
     passwordHash: data.passwordHash,
+    credentialsVersion: typeof data.credentialsVersion === "number" ? data.credentialsVersion : 0,
     updatedAt: data.updatedAt ?? null,
     passwordUpdatedAt: data.passwordUpdatedAt ?? null,
     resetTokenHash: data.resetTokenHash ?? null,
@@ -105,35 +113,59 @@ async function readAccount(): Promise<AdminAccountRecord | null> {
   };
 }
 
-/** Creates the primary admin doc from env/defaults when missing. */
+/**
+ * Ensures `adminAccounts/primary` exists in Firestore.
+ * Auth path: Firestore hashed password → JWT httpOnly cookie (no plain-text env check after seed).
+ */
 export async function ensureAdminAccount(): Promise<AdminAccountRecord> {
-  const existing = await readAccount();
-  if (existing) return existing;
-
   if (!isFirebaseAdminReady()) {
     throw new Error("Firebase Admin is not configured. Cannot manage admin account.");
   }
 
+  const existing = await readAccount();
   const email = bootstrapEmail();
+  const needsSeed =
+    !existing ||
+    (existing.credentialsVersion ?? 0) < CREDENTIALS_SEED_VERSION ||
+    existing.email === "kristopher@ridemesh.app";
+
+  if (!needsSeed && existing) return existing;
+
   const passwordHash = await hashPassword(bootstrapPassword());
-  const record: AdminAccountRecord = {
+  const name = existing?.name && existing.name !== "Admin" ? existing.name : "Admin";
+  const role = existing?.role || "System Overseer";
+
+  await accountRef().set(
+    {
+      email,
+      name,
+      role,
+      passwordHash,
+      credentialsVersion: CREDENTIALS_SEED_VERSION,
+      updatedAt: FieldValue.serverTimestamp(),
+      passwordUpdatedAt: FieldValue.serverTimestamp(),
+      ...(existing
+        ? {
+            resetTokenHash: FieldValue.delete(),
+            resetTokenExpiresAt: FieldValue.delete(),
+          }
+        : { createdAt: FieldValue.serverTimestamp() }),
+    },
+    { merge: true },
+  );
+
+  return {
     email,
-    name: "Admin",
-    role: "System Overseer",
+    name,
+    role,
     passwordHash,
+    credentialsVersion: CREDENTIALS_SEED_VERSION,
+    updatedAt: existing?.updatedAt ?? null,
+    passwordUpdatedAt: existing?.passwordUpdatedAt ?? null,
+    resetTokenHash: null,
+    resetTokenExpiresAt: null,
+    lastResetRequestAt: existing?.lastResetRequestAt ?? null,
   };
-
-  await accountRef().set({
-    email: record.email,
-    name: record.name,
-    role: record.role,
-    passwordHash: record.passwordHash,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-    passwordUpdatedAt: FieldValue.serverTimestamp(),
-  });
-
-  return record;
 }
 
 export async function getAdminAccountPublic(): Promise<AdminAccountPublic> {
@@ -161,9 +193,9 @@ export async function verifyAdminCredentials(email: string, password: string): P
 export function getDevAdminCredentials(): { email: string; password: string; note: string } | null {
   if (process.env.NODE_ENV !== "development") return null;
   return {
-    email: process.env.ADMIN_EMAIL || ADMIN_EMAIL_DEFAULT,
-    password: process.env.ADMIN_PASSWORD || ADMIN_PASSWORD_DEFAULT,
-    note: "Initial bootstrap password. After first sign-in, the hashed password in Firestore is the source of truth — change it under Account.",
+    email: bootstrapEmail(),
+    password: bootstrapPassword(),
+    note: "Seed credentials. Login uses the Firestore password hash + JWT session after bootstrap.",
   };
 }
 

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { fetchNewsletterData, sendNewsletterCampaign } from "@/lib/server/adminBackend";
+import { jsonCached, jsonNoStore } from "@/lib/server/httpCache";
 
 export async function GET() {
   const payload = await fetchNewsletterData();
-  return NextResponse.json(payload, { status: 200 });
+  return jsonCached(payload, 20);
 }
 
 export async function POST(request: Request) {
@@ -19,5 +20,5 @@ export async function POST(request: Request) {
     body: String(body.body || ""),
   });
 
-  return NextResponse.json(result, { status: result.ok ? 200 : 400 });
+  return jsonNoStore(result, result.ok ? 200 : 400);
 }

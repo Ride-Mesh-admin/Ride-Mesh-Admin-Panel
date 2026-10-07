@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, Info, AlertTriangle, CircleAlert } from "lucide-react";
 import { LogMetricsCards } from "@/components/system-logs/LogMetricsCards";
 import { ActivityLogList } from "@/components/system-logs/ActivityLogList";
 import { SystemStatusFooter } from "@/components/system-logs/SystemStatusFooter";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SERVICE_ID } from "@/lib/mock/system-logs";
+import { useAdminQuery } from "@/lib/client/useAdminQuery";
 import type { LogSeverity, SystemActivityLog, SystemLogsMetrics, SystemStatusBar } from "@/lib/types/log";
 
 type SeverityFilter = "all" | LogSeverity;
@@ -32,6 +33,24 @@ const EMPTY_STATUS: SystemStatusBar = {
   memory: "—",
 };
 
+type StreamPayload = {
+  logs: SystemActivityLog[];
+  status: SystemStatusBar;
+  serviceId: string;
+};
+
+async function fetchMetrics(): Promise<SystemLogsMetrics> {
+  const response = await fetch("/api/system-logs/metrics", { credentials: "include" });
+  if (!response.ok) throw new Error("Failed to load metrics");
+  return (await response.json()) as SystemLogsMetrics;
+}
+
+async function fetchStream(): Promise<StreamPayload> {
+  const response = await fetch("/api/system-logs/stream", { credentials: "include" });
+  if (!response.ok) throw new Error("Failed to load logs");
+  return (await response.json()) as StreamPayload;
+}
+
 function LogsSkeleton() {
   return (
     <div className="space-y-4" aria-busy="true" aria-label="Loading system logs">
@@ -48,64 +67,27 @@ function LogsSkeleton() {
 }
 
 export default function SystemLogsPage() {
-  const [metrics, setMetrics] = useState<SystemLogsMetrics | null>(null);
-  const [logs, setLogs] = useState<SystemActivityLog[]>([]);
-  const [status, setStatus] = useState<SystemStatusBar>(EMPTY_STATUS);
-  const [serviceId, setServiceId] = useState(SERVICE_ID);
-  const [loading, setLoading] = useState(true);
+  const { data: metrics, loading: metricsLoading } = useAdminQuery<SystemLogsMetrics>({
+    key: "system-logs-metrics",
+    fetcher: fetchMetrics,
+    refreshInterval: 45_000,
+    staleTime: 12_000,
+  });
+  const { data: stream, loading: streamLoading } = useAdminQuery<StreamPayload>({
+    key: "system-logs-stream",
+    fetcher: fetchStream,
+    refreshInterval: 45_000,
+    staleTime: 12_000,
+  });
+
+  const logs = stream?.logs ?? [];
+  const status = stream?.status ?? EMPTY_STATUS;
+  const serviceId = stream?.serviceId ?? SERVICE_ID;
+  const loading = (metricsLoading && !metrics) || (streamLoading && !stream);
+
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [timeRange, setTimeRange] = useState(TIME_RANGES[0]);
   const [autoScroll, setAutoScroll] = useState(true);
-
-  useEffect(() => {
-    let isMounted = true;
-    async function loadMetrics() {
-      try {
-        const response = await fetch("/api/system-logs/metrics", { cache: "no-store", credentials: "include" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as SystemLogsMetrics;
-        if (isMounted) setMetrics(payload);
-      } catch {
-        // Keep empty until a successful load.
-      }
-    }
-    void loadMetrics();
-    const timer = window.setInterval(loadMetrics, 30000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    async function loadStream() {
-      try {
-        const response = await fetch("/api/system-logs/stream", { cache: "no-store", credentials: "include" });
-        if (!response.ok) return;
-        const payload = (await response.json()) as {
-          logs: SystemActivityLog[];
-          status: SystemStatusBar;
-          serviceId: string;
-        };
-        if (isMounted) {
-          setLogs(payload.logs);
-          setStatus(payload.status);
-          setServiceId(payload.serviceId);
-        }
-      } catch {
-        // Keep empty until a successful load.
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
-    void loadStream();
-    const timer = window.setInterval(loadStream, 20000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(timer);
-    };
-  }, []);
 
   const filteredLogs = useMemo(() => {
     let list = logs;
@@ -125,7 +107,7 @@ export default function SystemLogsPage() {
         </div>
       </div>
 
-      {loading && !metrics ? (
+      {loading ? (
         <LogsSkeleton />
       ) : (
         <>

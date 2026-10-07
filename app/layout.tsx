@@ -1,8 +1,14 @@
 import type { Metadata } from "next";
-import { Manrope } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const manrope = Manrope({ subsets: ["latin"], variable: "--font-geist-sans" });
+const manrope = localFont({
+  src: "./fonts/manrope-latin-wght-normal.woff2",
+  weight: "200 800",
+  variable: "--font-geist-sans",
+  display: "swap",
+  fallback: ["system-ui", "Segoe UI", "sans-serif"],
+});
 
 export const metadata: Metadata = {
   title: "RideMesh Admin",
@@ -16,7 +22,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={manrope.variable} data-theme="light">
-      <body className="min-h-screen bg-background font-sans text-text-primary">{children}</body>
+      <body className={`${manrope.className} min-h-screen bg-background font-sans text-text-primary`}>
+        {children}
+      </body>
     </html>
   );
 }

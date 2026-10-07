@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useCallback, useDeferredValue, useEffect } from "react";
 import { Search, ChevronDown, List, LayoutGrid, RefreshCw } from "lucide-react";
 import { RideListTable } from "@/components/rides/RideListTable";
 import { RideCardGrid } from "@/components/rides/RideCardGrid";
 import { RideDetailPanel } from "@/components/rides/RideDetailPanel";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { useAdminQuery, invalidateAdminQuery } from "@/lib/client/useAdminQuery";
+import { useDebouncedValue } from "@/lib/client/debounce";
 import type { RideStatus, RideListItem, RideDetail } from "@/lib/types/ride";
 
 const STATUS_OPTIONS: { value: "all" | RideStatus; label: string }[] = [
@@ -19,6 +21,18 @@ const STATUS_OPTIONS: { value: "all" | RideStatus; label: string }[] = [
 ];
 
 const EMPTY_STATS = { activeRides: 0, reported: 0, moderatorsOnline: 0 };
+
+type RidesPayload = {
+  rides: RideListItem[];
+  detailsById: Record<string, RideDetail>;
+  stats: { activeRides: number; reported: number; moderatorsOnline: number };
+};
+
+async function fetchRides(): Promise<RidesPayload> {
+  const response = await fetch("/api/admin/rides", { credentials: "include" });
+  if (!response.ok) throw new Error("Failed to load rides");
+  return (await response.json()) as RidesPayload;
+}
 
 function RidesSkeleton() {
   return (
@@ -36,11 +50,20 @@ function RidesSkeleton() {
 }
 
 export default function RidesPage() {
-  const [rides, setRides] = useState<RideListItem[]>([]);
-  const [rideDetails, setRideDetails] = useState<Record<string, RideDetail>>({});
-  const [rideStats, setRideStats] = useState(EMPTY_STATS);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, reload, mutate } = useAdminQuery<RidesPayload>({
+    key: "rides",
+    fetcher: fetchRides,
+    refreshInterval: 60_000,
+    staleTime: 12_000,
+  });
+
+  const rides = data?.rides ?? [];
+  const rideDetails = data?.detailsById ?? {};
+  const rideStats = data?.stats ?? EMPTY_STATS;
+
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const deferredSearch = useDeferredValue(debouncedSearch);
   const [statusFilter, setStatusFilter] = useState<"all" | RideStatus>("all");
   const [listView, setListView] = useState(true);
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
@@ -49,61 +72,40 @@ export default function RidesPage() {
   const [lastQueueSyncAt, setLastQueueSyncAt] = useState<number | null>(null);
   const [queueRefreshError, setQueueRefreshError] = useState<string | null>(null);
 
-  const loadRides = useCallback(async (opts?: { manual?: boolean }) => {
-    if (opts?.manual) {
-      setQueueRefreshing(true);
-      setQueueRefreshError(null);
-    }
-    try {
-      const response = await fetch("/api/admin/rides", { cache: "no-store", credentials: "include" });
-      if (!response.ok) {
-        if (opts?.manual) {
-          setQueueRefreshError(response.status === 401 ? "Session expired — sign in again." : "Could not refresh queue.");
-        }
-        return;
-      }
-      const payload = (await response.json()) as {
-        rides: RideListItem[];
-        detailsById: Record<string, RideDetail>;
-        stats: { activeRides: number; reported: number; moderatorsOnline: number };
-      };
-      setRides(payload.rides);
-      setRideDetails(payload.detailsById);
-      setRideStats(payload.stats);
-      setLastQueueSyncAt(Date.now());
-      setQueueRefreshError(null);
-      setSelectedRideId((current) => {
-        const ids = new Set(payload.rides.map((r) => r.id));
-        if (current && ids.has(current)) return current;
-        return payload.rides[0]?.id ?? null;
-      });
-    } catch {
-      if (opts?.manual) setQueueRefreshError("Network error — try again.");
-    } finally {
-      setLoading(false);
-      if (opts?.manual) setQueueRefreshing(false);
-    }
-  }, []);
-
-  const refreshQueue = useCallback(() => loadRides({ manual: true }), [loadRides]);
-
   useEffect(() => {
-    let isMounted = true;
-    async function tick() {
-      if (!isMounted) return;
-      await loadRides();
+    if (!data) return;
+    setLastQueueSyncAt(Date.now());
+    setSelectedRideId((current) => {
+      const ids = new Set(data.rides.map((r) => r.id));
+      if (current && ids.has(current)) return current;
+      return data.rides[0]?.id ?? null;
+    });
+  }, [data]);
+
+  const refreshQueue = useCallback(async () => {
+    setQueueRefreshing(true);
+    setQueueRefreshError(null);
+    try {
+      invalidateAdminQuery("rides");
+      await reload();
+      setLastQueueSyncAt(Date.now());
+    } catch {
+      setQueueRefreshError("Network error — try again.");
+    } finally {
+      setQueueRefreshing(false);
     }
-    void tick();
-    const timer = window.setInterval(tick, 45000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(timer);
-    };
-  }, [loadRides]);
+  }, [reload]);
 
   const handleBlacklist = useCallback(
     async (rideId: string) => {
       setModeratingId(rideId);
+      mutate((prev) => ({
+        rides: (prev?.rides ?? []).map((r) =>
+          r.id === rideId ? { ...r, status: "blacklisted" as const, isBlacklisted: true } : r,
+        ),
+        detailsById: prev?.detailsById ?? {},
+        stats: prev?.stats ?? EMPTY_STATS,
+      }));
       try {
         const res = await fetch(`/api/admin/rides/${rideId}/moderate`, {
           method: "POST",
@@ -113,22 +115,25 @@ export default function RidesPage() {
         });
         if (!res.ok) {
           console.warn("Ride blacklist failed", await res.text());
+          invalidateAdminQuery("rides");
+          await reload();
         }
       } catch (e) {
         console.warn(e);
+        invalidateAdminQuery("rides");
+        await reload();
       } finally {
         setModeratingId(null);
-        await loadRides();
       }
     },
-    [loadRides],
+    [mutate, reload],
   );
 
   const filteredRides = useMemo(() => {
     let list = rides;
     if (statusFilter !== "all") list = list.filter((r) => r.status === statusFilter);
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (deferredSearch.trim()) {
+      const q = deferredSearch.toLowerCase();
       list = list.filter(
         (r) =>
           r.title.toLowerCase().includes(q) ||
@@ -137,11 +142,11 @@ export default function RidesPage() {
       );
     }
     return list;
-  }, [search, statusFilter, rides]);
+  }, [deferredSearch, statusFilter, rides]);
 
   const selectedDetail = selectedRideId ? rideDetails[selectedRideId] ?? null : null;
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="flex h-full flex-col">
         <RidesSkeleton />

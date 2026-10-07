@@ -47,7 +47,9 @@ export function AlertCard({
         isSelected ? "border-brand bg-brand-soft" : "border-border bg-surface hover:border-brand/40"
       }`}
     >
-      <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${config.badgeClass}`}>
+      <span
+        className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[11px] font-semibold leading-none tracking-wide ${config.badgeClass}`}
+      >
         {config.label}
       </span>
       <p className="mb-3 mt-2 text-xs text-text-secondary">ACTIVE: {alert.activeDuration}</p>
