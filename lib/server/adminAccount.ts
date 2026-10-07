@@ -182,9 +182,30 @@ export async function getAdminAccountPublic(): Promise<AdminAccountPublic> {
 export async function verifyAdminCredentials(email: string, password: string): Promise<boolean> {
   try {
     const account = await ensureAdminAccount();
-    if (!emailsEqual(email, account.email)) return false;
-    return verifyPassword(password, account.passwordHash);
-  } catch {
+    const emailOk = emailsEqual(email, account.email);
+    const hash = account.passwordHash || "";
+    const hashLooksScrypt = hash.startsWith("scrypt$");
+    const passwordOk = hashLooksScrypt ? await verifyPassword(password, hash) : false;
+
+    console.error("======== ADMIN LOGIN DEBUG ========");
+    console.error("firebaseReady:", isFirebaseAdminReady());
+    console.error("inputEmail:", JSON.stringify(email));
+    console.error("storedEmail:", JSON.stringify(account.email));
+    console.error("emailMatch:", emailOk);
+    console.error("inputPasswordLen:", password.length);
+    console.error("hashPrefix:", hash.slice(0, 40));
+    console.error("hashLooksScrypt:", hashLooksScrypt);
+    console.error("passwordMatch:", passwordOk);
+    console.error("credentialsVersion:", account.credentialsVersion);
+    console.error("bootstrapEmailEnvSet:", Boolean(process.env.ADMIN_EMAIL));
+    console.error("bootstrapPasswordEnvSet:", Boolean(process.env.ADMIN_PASSWORD));
+    console.error("===================================");
+
+    return emailOk && passwordOk;
+  } catch (err) {
+    console.error("======== ADMIN LOGIN DEBUG ERROR ========");
+    console.error(err);
+    console.error("========================================");
     return false;
   }
 }
